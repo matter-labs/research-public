@@ -161,6 +161,7 @@ extInps-genTraceA _ = {!!}
 
 
 postulate
+ -- I assume this projects the "public" part of the trace
  projPos : ℕ × List ℕ → List ℤ → List ℤ
 
 
@@ -202,7 +203,7 @@ brr4 true true true = refl
 
 
 completeness : (c : Circuit)
-  → (trace : Bool × List ℤ)
+  → (trace : Bool × List ℤ)  -- Maybe List ℤ?
   → (cs : CS)
   → (pos : ℕ × List ℕ)
   → WellFormedCircuit c pos
@@ -277,6 +278,11 @@ completeness (seq c₁ c₂) trace cs pos wfc wfcs pr rp prop
     (Eq.sym (aux c₁ cs pos (Eq.sym rp)))
     (completeness c₁ trace cs pos (proj₁ wfc) wfcs pr rp prop)
     
+completeness (mul x₁ x₂) trace cs pos wfc wfcs pr rp prop with satCS cs (proj₂ trace) ≟b true
+... | .true because ofʸ a = {! !}
+... | .false because ofⁿ a = {! !}
+
+
 completeness _ = {!!}
 
 

@@ -1,3 +1,4 @@
 name: clap
 include: .
 depend: standard-library
+flags: --lossy-unification
