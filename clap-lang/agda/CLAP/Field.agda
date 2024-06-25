@@ -25,6 +25,8 @@ module _
       hasInverse : (x : A) → ¬ x ≈ 0r → Σ[ y ∈ A ] ((x · y) ≈ 1r)
       0≢1        : ¬ 0r ≈ 1r
 
+    open IsCommutativeRing isCommutativeRing public
+
 record Field : Set (suc (a ⊔ ℓ)) where
   infix  8 -_
   infixl 7 _*_
@@ -42,5 +44,5 @@ record Field : Set (suc (a ⊔ ℓ)) where
     dec≈ : Decidable _≈_
 
   open IsField isField public
-
+  
 
