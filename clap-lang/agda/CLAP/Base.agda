@@ -8,7 +8,7 @@ open import Data.Fin using (Fin; #_; _↑ˡ_; _↑ʳ_)
 open import Data.List using (List)
 open import Data.List.Relation.Unary.All using (All)
 open import Data.Vec.Relation.Unary.All using () renaming (All to AllV)
-open import Data.Product using (uncurry)
+open import Data.Product using (_,_; uncurry)
 open import Data.Maybe.Relation.Binary.Pointwise using (Pointwise)
 
 open import Relation.Nullary.Decidable
@@ -268,12 +268,12 @@ soundness .0 .1 (const v) [] (o ∷ []) [] (sat₀ All.∷ _) = Pointwise.just (
 soundness .2 .1 add (x₁ ∷ x₂ ∷ []) (z ∷ []) priv₁ (sat₀ All.∷ _) = Pointwise.just (sat₀ AllV.∷ AllV.[])
 soundness .2 .1 mul (x₁ ∷ x₂ ∷ []) (z ∷ []) priv₁ (sat₀ All.∷ _) = Pointwise.just (sat₀ AllV.∷ AllV.[])
 soundness .1 .1 isZero (x ∷ []) (z ∷ []) (k₀ ∷ k₁ ∷ y ∷ exy ∷ []) (
-    sat₀ All.∷
-    sat₁ All.∷
-    sat₂ All.∷
-    sat₃ All.∷
-    sat₄ All.∷
-    sat₅ All.∷
+    k₀≈0 All.∷
+    k₁≈1 All.∷
+    x*z≈k₀ All.∷
+    x*y≈exy All.∷
+    exy+z≈k₁ All.∷
+    z*z≈z All.∷
     All.[]
   ) = Pointwise.just (goal AllV.∷ AllV.[])
   where
@@ -284,25 +284,44 @@ soundness .1 .1 isZero (x ∷ []) (z ∷ []) (k₀ ∷ k₁ ∷ y ∷ exy ∷ []
       let xy≈0 : exy ≈ 0F
           xy≈0 = begin
               exy
-            ≈⟨ sym sat₃ ⟩
+            ≈⟨ sym x*y≈exy ⟩
               x *F y 
             ≈⟨ *-congʳ x≈0 ⟩
               0F *F y
-            ≈⟨ {! !} ⟩
+            ≈⟨ zeroˡ y ⟩
               0F
             ∎
       in begin
         1F
-      ≈⟨ sym sat₁ ⟩
+      ≈⟨ sym k₁≈1 ⟩
         k₁
-      ≈⟨ sym sat₄ ⟩
+      ≈⟨ sym exy+z≈k₁ ⟩
         exy +F z
       ≈⟨ +-congʳ xy≈0 ⟩
         0F +F z
       ≈⟨ +-identityˡ z ⟩
         z
       ∎
-    ... | .false because ofⁿ ¬a = {!!}
+    ... | .false because ofⁿ ¬x≈0 =
+      let
+        x⁻¹ , isInv = hasInverse x ¬x≈0
+      in begin
+        0F
+      ≈⟨ sym (zeroʳ x⁻¹) ⟩
+        x⁻¹ *F 0F
+      ≈⟨ *-congˡ (sym k₀≈0) ⟩
+        x⁻¹ *F k₀
+      ≈⟨ *-congˡ (sym x*z≈k₀) ⟩
+        x⁻¹ *F (x *F z)
+      ≈⟨ sym (*-assoc x⁻¹ x z) ⟩
+        (x⁻¹ *F x) *F z
+      ≈⟨ *-congʳ (*-comm x⁻¹ x) ⟩
+        (x *F x⁻¹) *F z
+      ≈⟨ *-congʳ isInv ⟩
+        1F *F z
+      ≈⟨ *-identityˡ z ⟩
+        z
+      ∎
 soundness .1 .0 eq0 inp out priv₁ sat = {! !}
 soundness .1 .0 neq0 inp out priv₁ sat = {! !}
 soundness .0 .0 empty inp out priv₁ sat = {! !}
