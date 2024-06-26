@@ -12,13 +12,20 @@ open import Data.Product using (uncurry)
 open import Data.Maybe.Relation.Binary.Pointwise using (Pointwise)
 
 open import Relation.Nullary.Decidable
+open import Relation.Nullary.Reflects
 open import Relation.Binary.PropositionalEquality using (_≡_; subst)
 
 open import CLAP.Field
 
 module CLAP.Base (F : Field {ℓ = 0ℓ}) where
 
-open Field F using (_≈_; dec≈; sym) renaming (Carrier to Val; _+_ to _+F_; _*_ to _*F_; 0# to 0F; 1# to 1F)
+open Field F using (_≈_; dec≈; sym) renaming
+  (Carrier to Val;
+  _+_ to _+F_;
+  _*_ to _*F_;
+  0# to 0F;
+  1# to 1F;
+  setoid to F-setoid)
 
 data Circuit : ℕ → ℕ → Set where
   const   : (v : Val) → Circuit 0 1
@@ -248,6 +255,8 @@ v₁ ≈v v₂ = AllV (uncurry _≈_) (zip v₁ v₂)
 _j≈v_ : ∀ {n} → (mv₁ : Maybe (Vec Val n)) → (mv₂ : Maybe (Vec Val n)) → Set
 _j≈v_ = Pointwise _≈v_
 
+open import Relation.Binary.Reasoning.Setoid F-setoid
+
 soundness : ∀ m n
   (circ : Circuit m n)
   (inp : Vec Val m)
@@ -256,15 +265,51 @@ soundness : ∀ m n
   → satCS ((inp ++ out) ++ priv) (Circuit→CS circ)
   → ⟦ circ ⟧ inp j≈v just out
 soundness .0 .1 (const v) [] (o ∷ []) [] (sat₀ All.∷ _) = Pointwise.just (sym sat₀ AllV.∷ AllV.[])
-soundness .2 .1 add inp out priv₁ x = {! !}
-soundness .2 .1 mul inp out priv₁ x = {! !}
-soundness .1 .1 isZero inp out priv₁ x = {! !}
-soundness .1 .0 eq0 inp out priv₁ x = {! !}
-soundness .1 .0 neq0 inp out priv₁ x = {! !}
-soundness .0 .0 empty inp out priv₁ x = {! !}
-soundness .1 .1 id inp out priv₁ x = {! !}
-soundness .1 .2 copy inp out priv₁ x = {! !}
-soundness .1 .0 discard inp out priv₁ x = {! !}
-soundness .2 .2 swap inp out priv₁ x = {! !}
-soundness m n (seq circ circ₁) inp out priv₁ x = {! !}
-soundness .(_ + _) .(_ + _) (par circ circ₁) inp out priv₁ x = {! !}
+soundness .2 .1 add (x₁ ∷ x₂ ∷ []) (z ∷ []) priv₁ (sat₀ All.∷ _) = Pointwise.just (sat₀ AllV.∷ AllV.[])
+soundness .2 .1 mul (x₁ ∷ x₂ ∷ []) (z ∷ []) priv₁ (sat₀ All.∷ _) = Pointwise.just (sat₀ AllV.∷ AllV.[])
+soundness .1 .1 isZero (x ∷ []) (z ∷ []) (k₀ ∷ k₁ ∷ y ∷ exy ∷ []) (
+    sat₀ All.∷
+    sat₁ All.∷
+    sat₂ All.∷
+    sat₃ All.∷
+    sat₄ All.∷
+    sat₅ All.∷
+    All.[]
+  ) = Pointwise.just (goal AllV.∷ AllV.[])
+  where
+    open Field F hiding (_≈_; dec≈; sym)
+    goal : ite≈0F x 1F 0F ≈ z
+    goal with (dec≈ x 0F)
+    ... | .true  because ofʸ x≈0 =
+      let xy≈0 : exy ≈ 0F
+          xy≈0 = begin
+              exy
+            ≈⟨ sym sat₃ ⟩
+              x *F y 
+            ≈⟨ *-congʳ x≈0 ⟩
+              0F *F y
+            ≈⟨ {! !} ⟩
+              0F
+            ∎
+      in begin
+        1F
+      ≈⟨ sym sat₁ ⟩
+        k₁
+      ≈⟨ sym sat₄ ⟩
+        exy +F z
+      ≈⟨ +-congʳ xy≈0 ⟩
+        0F +F z
+      ≈⟨ +-identityˡ z ⟩
+        z
+      ∎
+    ... | .false because ofⁿ ¬a = {!!}
+soundness .1 .0 eq0 inp out priv₁ sat = {! !}
+soundness .1 .0 neq0 inp out priv₁ sat = {! !}
+soundness .0 .0 empty inp out priv₁ sat = {! !}
+soundness .1 .1 id inp out priv₁ sat = {! !}
+soundness .1 .2 copy inp out priv₁ sat = {! !}
+soundness .1 .0 discard inp out priv₁ sat = {! !}
+soundness .2 .2 swap inp out priv₁ sat = {! !}
+soundness m n (seq circ circ₁) inp out priv₁ sat = {! !}
+soundness .(_ + _) .(_ + _) (par circ circ₁) inp out priv₁ sat = {! !}
+
