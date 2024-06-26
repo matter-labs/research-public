@@ -8,7 +8,7 @@ open import Data.Fin using (Fin; #_; _↑ˡ_; _↑ʳ_)
 open import Data.List using (List)
 open import Data.List.Relation.Unary.All using (All)
 open import Data.Vec.Relation.Unary.All using () renaming (All to AllV)
-open import Data.Product using (_,_; uncurry)
+open import Data.Product using (_×_; _,_; uncurry)
 open import Data.Maybe.Relation.Binary.Pointwise using (Pointwise)
 
 open import Relation.Nullary.Decidable
@@ -107,6 +107,13 @@ satisfies tr (l ＝ᵥ o)    = lookup tr l ≈ lookup tr o
 
 satCS : ∀ {n} → Trace n → ConstraintSystem n → Set
 satCS tr = All (satisfies tr)
+
+module _ where
+  open import Data.List using () renaming (_++_ to _++L_)
+  open import Data.List.Relation.Unary.All.Properties
+
+  satCS-++ : ∀ {n} → (tr : Trace n) (cs₁ : ConstraintSystem n) {cs₂ : ConstraintSystem n} → satCS tr (cs₁ ++L cs₂) → satCS tr cs₁ × satCS tr cs₂ 
+  satCS-++ tr cs₁ = ++⁻ cs₁
 
 extraVars : ∀ {m n} → Circuit m n → ℕ
 extraVars (const v)   = 0
@@ -268,13 +275,13 @@ soundness .0 .1 (const v) [] (o ∷ []) [] (sat₀ All.∷ _) = Pointwise.just (
 soundness .2 .1 add (x₁ ∷ x₂ ∷ []) (z ∷ []) priv₁ (sat₀ All.∷ _) = Pointwise.just (sat₀ AllV.∷ AllV.[])
 soundness .2 .1 mul (x₁ ∷ x₂ ∷ []) (z ∷ []) priv₁ (sat₀ All.∷ _) = Pointwise.just (sat₀ AllV.∷ AllV.[])
 soundness .1 .1 isZero (x ∷ []) (z ∷ []) (k₀ ∷ k₁ ∷ y ∷ exy ∷ []) (
-    k₀≈0 All.∷
-    k₁≈1 All.∷
-    x*z≈k₀ All.∷
-    x*y≈exy All.∷
-    exy+z≈k₁ All.∷
-    z*z≈z All.∷
-    All.[]
+    k₀≈0      All.∷
+    k₁≈1      All.∷
+    x*z≈k₀    All.∷
+    x*y≈exy   All.∷
+    exy+z≈k₁  All.∷
+    z*z≈z     All.∷
+              All.[]
   ) = Pointwise.just (goal AllV.∷ AllV.[])
   where
     open Field F hiding (_≈_; dec≈; sym)
@@ -329,6 +336,14 @@ soundness .1 .1 id inp out priv₁ sat = {! !}
 soundness .1 .2 copy inp out priv₁ sat = {! !}
 soundness .1 .0 discard inp out priv₁ sat = {! !}
 soundness .2 .2 swap inp out priv₁ sat = {! !}
-soundness m n (seq circ circ₁) inp out priv₁ sat = {! !}
+soundness m p (seq {n = n} circ₁ circ₂) inp₁ out₂ oi-pr₁-pr₂ sat = let
+    npr₁ = extraVars circ₁
+    npr₂ = extraVars circ₂
+    (oi-pr₁ , pr₂ , oi-pr₁-pr₂-eq) = splitAt (n + npr₁) oi-pr₁-pr₂
+    (oi , pr₁ , oi-pr₁-eq) = splitAt n oi-pr₁
+    (sat-rm₁ , sat-rm₂) = satCS-++ ((inp₁ ++ out₂) ++ oi-pr₁-pr₂) (remapCS remap→seq₁ (Circuit→CS circ₁)) sat
+    ihcirc₁ = soundness m n circ₁ inp₁ oi pr₁ {! !}
+    ihcirc₂ = soundness n p circ₂ oi out₂ pr₂ {! !}
+  in {! sat!}
 soundness .(_ + _) .(_ + _) (par circ circ₁) inp out priv₁ sat = {! !}
 
