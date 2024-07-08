@@ -1,5 +1,3 @@
-
-
 open import Data.Integer renaming (_+_ to _+ᵢ_ ; _*_ to _*ᵢ_ ; _≟_ to _≟z_ ; +_ to ᵢ+_)
    using ( _≤ᵇ_ ; ℤ ; -[1+_] ; _/_ ; ≢-nonZero ; _%_ ; _-_ ; ∣_∣ )
 
@@ -27,6 +25,8 @@ import Relation.Binary.PropositionalEquality as Eq
 open Eq using (_≡_; refl ; decSetoid)
 
 open import Data.List.Relation.Unary.Any
+
+
 
 Field : Set
 Field = ℤ

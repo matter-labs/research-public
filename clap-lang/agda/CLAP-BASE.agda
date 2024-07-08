@@ -39,10 +39,12 @@ open import Data.List.Extrema ≤-totalOrder
 open import Relation.Nullary
 
 
-CS = ℕ × List Expr
 
+
+{- inputs are positions in the trace -}
 Input = ℕ
 
+{- circuits are parameterized by gates, sequential and parallel composition -}
 data Circuit : Set where
   empty  : Circuit
   seq    : Circuit → Circuit → Circuit
@@ -50,25 +52,27 @@ data Circuit : Set where
   gate   : Gate → Circuit
 
 
+{- computes the length and output variables -}
 extInps : Circuit → ℕ × List ℕ → ℕ × List ℕ
 extInps empty (n ,, l) = n ,, l
 extInps (seq c c₁) (n ,, l) = extInps c₁ (extInps c (n ,, l))
 extInps (par c c₁) (n ,, l) = extInps c₁ (extInps c (n ,, l))
 extInps (gate g) poses = extInps-gate g poses
 
+{- predicate which establishes that all inputs could be resolved (dependencies form a DAG) -}
 WellFormedCircuit : Circuit → ℕ × List ℕ → Set
 WellFormedCircuit empty l = ⊤
 WellFormedCircuit (seq c₁ c₂) (n ,, l) = WellFormedCircuit c₁ (n ,, l) × WellFormedCircuit c₂ (extInps c₁ (n ,, l))
 WellFormedCircuit (par c₁ c₂) (n ,, l) = WellFormedCircuit c₁ (n ,, l) × WellFormedCircuit c₂ (n ,, l) × WellFormedCircuit c₂ (extInps c₁ (n ,, l))
 WellFormedCircuit (gate g) = WellFormedGate g
 
+{- constraint expressions are well-formed -}
 WFCS : List Expr → ℕ → Set
 WFCS [] n = ⊤
 WFCS (x ∷ xs) n = WFCS-expr x n × WFCS xs n
 
-lkp : ℕ → List Field → Field
-lkp n t = lkp-gen zeroF n t
 
+{- generates a trace from a circuit and an input trace -}
 genTrace : Circuit → List Field → List Field
 genTrace empty t = t
 genTrace (seq c c₁) t = genTrace c₁ (genTrace c t)
@@ -76,6 +80,18 @@ genTrace (par c c₁) t = genTrace c₁ (genTrace c t)
 genTrace (gate g) t = genTraceGate g t
 
 
+{- same as above, but also computes the boolean flag which establishes whether the circuit diverged  -}
+genTraceA : Circuit → Bool × List Field → Bool × List Field
+genTraceA empty (b ,, t) = b ,, t
+genTraceA (seq c c₁) bt = genTraceA c₁ (genTraceA c bt)
+genTraceA (par c c₁) bt = genTraceA c₁ (genTraceA c bt)
+genTraceA (gate x) bt = genTraceAGate x bt 
+
+
+{- constraint-system is a pair of a natural (the size of a trace) and a list of constraint-expressions -}
+CS = ℕ × List Expr
+
+{- produce a constraint-system from a circuit and initial constriant-system (could be empty)  -}
 genCS : Circuit → CS → CS
 genCS (gate x) cs = genCS-gate x cs
 genCS (seq c c₁) cs = genCS c₁ (genCS c cs)
@@ -83,18 +99,17 @@ genCS (par c c₁) cs = genCS c₁ (genCS c cs)
 genCS empty cs = cs
 
 
-genTraceA : Circuit → Bool × List Field → Bool × List Field
-genTraceA empty (b ,, t) = b ,, t
-genTraceA (seq c c₁) bt = genTraceA c₁ (genTraceA c bt)
-genTraceA (par c c₁) bt = genTraceA c₁ (genTraceA c bt)
-genTraceA (gate x) bt = genTraceAGate x bt 
-
 satCS' : List Expr → List Field → Bool
 satCS' [] trace = true
 satCS' (x ∷ xs) trace = satCS'-expr x trace ∧ satCS' xs trace
 
+{- checks that a trace satisfies a constraint-system -}
 satCS : CS → List Field → Bool
 satCS (fst ,, snd) t = (length t ≡ᵇ fst) ∧ satCS' snd t
+
+lkp : ℕ → List Field → Field
+lkp n t = lkp-gen zeroF n t
+
 
 projPos : List ℕ → List Field → List Field
 projPos [] l = []
