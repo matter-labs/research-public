@@ -29,60 +29,27 @@ open import Data.List.Extrema ≤-totalOrder
 
 open import Relation.Nullary
 
---postulate 
---  _%%_ : ℤ → ℤ → ℤ
-
-_≡ᵇz_ : ℤ → ℤ → Bool
-x ≡ᵇz y = isYes (x ≟z y)
-
-_%%_ : ℤ → ℤ → ℤ
-a %% b with b ≟z (ᵢ+ 0)
-... | .true because ofʸ a₁ = (ᵢ+ 4)
-... | .false because ofⁿ ¬a = ᵢ+ _%_ a b ⦃ ≢-nonZero ¬a  ⦄
-
-_%/_ : ℤ → ℤ → ℤ
-a %/ b with b ≟z (ᵢ+ 0)
-... | .true because ofʸ a₁ = (ᵢ+ 4)
-... | .false because ofⁿ ¬a = _/_ a b ⦃ ≢-nonZero ¬a  ⦄
-
-signum : ℤ → ℤ
-signum (ᵢ+_ zero) = ᵢ+ zero
-signum (ᵢ+_ (suc n)) = ᵢ+ 1
-signum (-[1+_] n) = -[1+ 0 ]
-
-{-# TERMINATING #-}
-egcd : ℤ → ℤ → (ℤ × ℤ × ℤ)
-egcd a (ᵢ+_ 0) = ᵢ+ ∣ a ∣ ,, signum a ,, ᵢ+ 4
-egcd a b = let (g ,, x ,, y) = egcd b (a %% b) in (g ,, y ,, x - ((a %/ b) *ᵢ y))
-
-inverse : ℤ → ℤ → ℤ
-inverse a m = let (x ,, z ,, y) = egcd m a in y %% m
+open import EGCD (modulus)
 
 
 Input = ℕ
-
 
 data Circuit : Set where
   empty  : Circuit
   const  : ℤ → Circuit
   add    : Input → Input → Circuit
-  mul    : Input → Input → Circuit
   seq    : Circuit → Circuit → Circuit
   eq0    : Input → Circuit -- assert  = 0
-
-  neq0   : Input → Circuit -- assert != 0
-  isZero    : Input → Circuit
 
 
 extInps : Circuit → ℕ × List ℕ → ℕ × List ℕ
 extInps empty (n ,, l) = n ,, l
-extInps (const x) (n ,, l) = suc n ,, (suc n ∷ l)
-extInps (add x x₁) (n ,, l) = suc n ,, (suc n ∷ l)
-extInps (mul x x₁) (n ,, l) = suc n ,, (suc n ∷ l)
+extInps (const x) (n ,, l) = suc n ,, (n ∷ l)
+extInps (add x x₁) (n ,, l) = suc n ,, (n ∷ l)
 extInps (seq c c₁) (n ,, l) = extInps c₁ (extInps c (n ,, l))
 extInps (eq0 _) poses = poses
-extInps (neq0 _) (n ,, l) = 4 + n ,, l
-extInps (isZero _) (n ,, l) = 4 + n ,, l
+
+
 
 
 data Expr : Set where
@@ -94,10 +61,7 @@ WellFormedCircuit : Circuit → ℕ × List ℕ → Set
 WellFormedCircuit empty l = ⊤
 WellFormedCircuit (const x) l = ⊤
 WellFormedCircuit (add x₁ x₂) (n ,, l) = x₁ ∈ l × x₂ ∈ l × (suc x₁ ≤ n) × (suc x₂ ≤  n)
-WellFormedCircuit (mul x₁ x₂) (n ,, l) = x₁ ∈ l × x₂ ∈ l × (suc x₁ ≤ n) × (suc x₂ ≤  n)
 WellFormedCircuit (eq0 x) (n ,, l) = x ∈ l × (suc x ≤ n)
-WellFormedCircuit (neq0 x) (n ,, l) = x ∈ l × (suc x ≤ n)
-WellFormedCircuit (isZero x) (n ,, l) = x ∈ l × (suc x ≤ n)
 WellFormedCircuit (seq c₁ c₂) (n ,, l) = WellFormedCircuit c₁ (n ,, l) × WellFormedCircuit c₂ (extInps c₁ (n ,, l))
 
 
@@ -116,59 +80,25 @@ lkp zero (x ∷ l) = x
 lkp (suc x) [] = ᵢ+ 0
 lkp (suc x) (x₁ ∷ l) = lkp x l
 
-{-# TERMINATING #-}
+
+--genTraceA _ = {!!}
+
+
+--{-# TERMINATING #-}
 genTrace : Circuit → List ℤ → List ℤ
 genTrace (const x) t = t ++ [ x %% modulus ]
 genTrace (eq0 x) t = t
-
-genTrace (neq0 x) t = eq0-circ
-  where
-    t'          = t ++ [ inverse (lkp x t) modulus  ] --
-    fst         = length t
-    mul-circ    = genTrace (mul x fst) t'
-    const-circ  = genTrace (const -[1+ 0 ]) mul-circ
-    pred-circ   = genTrace (add (1 + fst) (2 + fst)) const-circ
-    eq0-circ    = genTrace (eq0 (3 + fst)) pred-circ
-
-
-genTrace (isZero x) t = pred-circ
-  where
-    t'          = t ++ [ inverse (lkp x t) modulus  ]
-    fst         = length t
-    mul-circ    = genTrace (mul x fst) t' -- l * r
-    const-circ  = genTrace (const -[1+ 0 ]) mul-circ
-    pred-circ   = genTrace (add (1 + fst) (2 + fst)) const-circ
-
-
-
 genTrace empty t = t
 genTrace (add x x₁) t = t ++ [ (lkp x t +ᵢ lkp x₁ t) %% modulus ]
-genTrace (mul x x₁) t = t ++ [ (lkp x t *ᵢ lkp x₁ t) %% modulus ]
 genTrace (seq c c₁) t = genTrace c₁ (genTrace c t)
 
 
 
-{-# TERMINATING #-}
+--{-# TERMINATING #-}
 genCS : Circuit → CS → CS
 genCS (const x) (fst ,, snd) = suc fst ,, fst ＝c x ∷ snd
 genCS (eq0 x) (fst ,, snd) = fst ,, x ＝c (ᵢ+ 0) ∷ snd
-
-genCS (neq0 x) cs@(fst ,, snd) = 4 + fst ,,  proj₂ eq0-circ
-  where
-    mul-circ    = genCS (mul x fst) (1 + fst ,, proj₂ cs) -- l * r
-    const-circ  = genCS (const -[1+ 0 ]) mul-circ
-    pred-circ   = genCS (add (1 + fst) (2 + fst)) const-circ
-    eq0-circ    = genCS (eq0 (3 + fst)) pred-circ
-
-genCS (isZero x) cs@(fst ,, snd) = 4 + fst ,,  proj₂ pred-circ
-  where
-    mul-circ    = genCS (mul x fst) (suc fst ,, proj₂ cs) -- 1 + fst = l * r
-    const-circ  = genCS (const -[1+ 0 ]) mul-circ
-    pred-circ   = genCS (add (1 + fst) (2 + fst)) const-circ
-
-
 genCS (add x x₁) (fst ,, snd) = suc fst ,, x + x₁ ＝ fst ∷ snd
-genCS (mul x x₁) (fst ,, snd) = suc fst ,, x * x₁ ＝ fst ∷ snd
 genCS (seq c c₁) cs = genCS c₁ (genCS c cs)
 genCS empty cs = cs
 
@@ -185,6 +115,17 @@ mb2b (just x) = x
 mb2b nothing = false
 
 
+genTraceA : Circuit → Bool × List ℤ → Bool × List ℤ
+genTraceA empty (b ,, t) = b ,, t
+genTraceA (const x) (b ,, t) = b ,, t ++ [ x  %% modulus ]
+genTraceA (eq0 x) (b ,, t) = b ∧ mb2b ((lkpmb x t) >>=m λ xv → just (xv  ≡ᵇz ((ᵢ+ 0) %% modulus) ))  ,, t
+genTraceA (add x x₁) (b ,, t) = b ,, t ++ [ (lkp x t +ᵢ lkp x₁ t) %% modulus ]
+genTraceA (seq c c₁) bt = genTraceA c₁ (genTraceA c bt)
+
+ 
+
+
+
 satCS' : List Expr → List ℤ → Bool
 satCS' [] trace = true
 satCS' ((x + x₁ ＝ x₂) ∷ snd) trace =
@@ -198,6 +139,7 @@ satCS' ((x * x₁ ＝ x₂) ∷ snd) trace =
 satCS' ((x ＝c x₁) ∷ snd) trace =
   mb2b (lkpmb x trace >>=m (λ xv → just (xv ≡ᵇz (x₁ %% modulus))))
           ∧ satCS' snd trace
+
 
 satCS : CS → List ℤ → Bool
 satCS (fst ,, snd) t = (length t ≡ᵇ fst) ∧ satCS' snd t

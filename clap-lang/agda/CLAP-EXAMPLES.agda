@@ -35,9 +35,8 @@ test1 : CM ⊤
 test1 = do c₁ ← const-gate (ᵢ+ 3)
            c₂ ← const-gate (ᵢ+ 0)
            c₃ ← add-gate c₁ c₂
-           c₄ ← mul-gate c₁ c₂
+           c₄ ← add-gate c₁ c₂
            assert-eq0 c₂
-           assert-neq0 c₁
            add-gate c₁ c₁
            return tt
 
@@ -51,104 +50,104 @@ _ : satCS' (proj₂ cs1) trace1 ≡ true
 _ = refl
 
 
-test2 : CM Var
-test2 = do c₁ ← const-gate (ᵢ+ 0)
-           c₂ ← iszero-gate c₁
-           return c₂
+-- test2 : CM Var
+-- test2 = do c₁ ← const-gate (ᵢ+ 0)
+--            c₂ ← iszero-gate c₁
+--            return c₂
 
-trace2 = runTrace test2
-cs2    = runCS  test2
+-- trace2 = runTrace test2
+-- cs2    = runCS  test2
 
-_ : satCS cs2 trace2 ≡ true
-_ = refl
-
-
-test3 : CM Var
-test3 = do c₁ ← const-gate (ᵢ+ 1)
-           cond ← iszero-gate c₁
-           trueBranch ← const-gate (ᵢ+ 4)
-           falseBranch ← const-gate (ᵢ+ 2)
-           r ← if-then-else cond trueBranch falseBranch
-           return r
+-- _ : satCS cs2 trace2 ≡ true
+-- _ = refl
 
 
-trace3 = runTrace test3
-cs3    = runCS test3
-
-_ : satCS cs3 trace3 ≡ true
-_ = refl
-
-
-test4 : CM Var
-test4 = do c ← const-gate (ᵢ+ 3)
-           minus-one ← const-gate (-[1+ 0 ])
-           c' ← mul-gate minus-one c
-           c' ← add-gate c c'
-           cond ← iszero-gate c'
-           trueBranch ← const-gate (ᵢ+ 2)
-           falseBranch ← const-gate (ᵢ+ 0)
-           r    ← if-then-else cond trueBranch falseBranch
-           return r
+-- test3 : CM Var
+-- test3 = do c₁ ← const-gate (ᵢ+ 1)
+--            cond ← iszero-gate c₁
+--            trueBranch ← const-gate (ᵢ+ 4)
+--            falseBranch ← const-gate (ᵢ+ 2)
+--            r ← if-then-else cond trueBranch falseBranch
+--            return r
 
 
-trace4 = runTrace test4
-cs4    = runCS test4
+-- trace3 = runTrace test3
+-- cs3    = runCS test3
 
-_ : satCS cs4 trace4 ≡ true
-_ = refl
-
-
-
-test5 : CM (Var × Var)
-test5 = do c  ← const-gate (ᵢ+ 1)
-           v1 ← const-gate (ᵢ+ 2)
-           v2 ← const-gate (ᵢ+ 3)
-           swap-gate c v1 v2
+-- _ : satCS cs3 trace3 ≡ true
+-- _ = refl
 
 
-trace5 = runTrace test5
-cs5    = runCS test5
+-- test4 : CM Var
+-- test4 = do c ← const-gate (ᵢ+ 3)
+--            minus-one ← const-gate (-[1+ 0 ])
+--            c' ← mul-gate minus-one c
+--            c' ← add-gate c c'
+--            cond ← iszero-gate c'
+--            trueBranch ← const-gate (ᵢ+ 2)
+--            falseBranch ← const-gate (ᵢ+ 0)
+--            r    ← if-then-else cond trueBranch falseBranch
+--            return r
+
+
+-- trace4 = runTrace test4
+-- cs4    = runCS test4
+
+-- _ : satCS cs4 trace4 ≡ true
+-- _ = refl
 
 
 
-test6' : ℕ → Var → CM Var
-test6' n v = iter n (return v) q
-  where
-   q : Var → CM Var
-   q z = do r ← mul-gate z v
-            return r
-
-test6 : CM Var
-test6 = do c ← const-gate (ᵢ+ 3)
-           q ← test6' 2 c
-           return c
-
-trace6 = runTrace test6
-cs6    = runCS test6
+-- test5 : CM (Var × Var)
+-- test5 = do c  ← const-gate (ᵢ+ 1)
+--            v1 ← const-gate (ᵢ+ 2)
+--            v2 ← const-gate (ᵢ+ 3)
+--            swap-gate c v1 v2
 
 
-_ : satCS cs6 trace6 ≡ true
-_ = refl
+-- trace5 = runTrace test5
+-- cs5    = runCS test5
 
 
-{- computes 1+2+3+...+n -}
-test7 : ℕ → CM Var
-test7 n = do count ← const-gate (ᵢ+ 0)
-             acc ← const-gate (ᵢ+ 0)
-             q  ← iter n (return (acc ,, count)) 
-                                (λ (acc ,, count)  → do one ← const-gate (ᵢ+ 1)
-                                                        count ← add-gate count one
-                                                        acc  ← add-gate acc count
-                                                        assert-neq0 acc
-                                                        return (acc ,, count))
-             return (proj₁ q)
+
+-- test6' : ℕ → Var → CM Var
+-- test6' n v = iter n (return v) q
+--   where
+--    q : Var → CM Var
+--    q z = do r ← mul-gate z v
+--             return r
+
+-- test6 : CM Var
+-- test6 = do c ← const-gate (ᵢ+ 3)
+--            q ← test6' 2 c
+--            return c
+
+-- trace6 = runTrace test6
+-- cs6    = runCS test6
+
+
+-- _ : satCS cs6 trace6 ≡ true
+-- _ = refl
+
+
+-- {- computes 1+2+3+...+n -}
+-- test7 : ℕ → CM Var
+-- test7 n = do count ← const-gate (ᵢ+ 0)
+--              acc ← const-gate (ᵢ+ 0)
+--              q  ← iter n (return (acc ,, count)) 
+--                                 (λ (acc ,, count)  → do one ← const-gate (ᵢ+ 1)
+--                                                         count ← add-gate count one
+--                                                         acc  ← add-gate acc count
+--                                                         assert-neq0 acc
+--                                                         return (acc ,, count))
+--              return (proj₁ q)
       
 
 
-trace7 = runTrace (test7 5)
-cs7    = runCS (test7 5)
+-- trace7 = runTrace (test7 5)
+-- cs7    = runCS (test7 5)
 
-_ : satCS cs7 trace7 ≡ true
-_ = refl
+-- _ : satCS cs7 trace7 ≡ true
+-- _ = refl
 
 
