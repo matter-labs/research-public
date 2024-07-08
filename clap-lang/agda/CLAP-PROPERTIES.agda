@@ -40,6 +40,8 @@ open import Relation.Nullary
 open import CLAP-BASE Field zeroF Gate Expr extInps-gate  WellFormedGate genTraceGate genTraceAGate genCS-gate WFCS-expr satCS'-expr 
 
 
+
+
 module SoundnessAndCompletenessCompose 
   (extInpsMonotonic-gate : (c : Gate) 
     → (pos : ℕ × List ℕ) 
@@ -93,6 +95,34 @@ module SoundnessAndCompletenessCompose
  where
 
 
+ Completeness : Circuit → Set
+ Completeness c = (trace : Bool × List Field)
+   → (cs : CS)
+   → (pos : ℕ × List ℕ)
+   → WellFormedCircuit c pos
+   → WFCS (proj₂ cs) (proj₁ pos)
+   → length (proj₂ trace) ≡ proj₁ pos
+   → (proj₁ pos) ≡ proj₁ cs
+   → satCS cs (proj₂ trace) ≡ (proj₁ trace)
+   → satCS (genCS c cs) (proj₂ (genTraceA c trace)) ≡ proj₁ (genTraceA c trace)
+
+
+ Soundness : Circuit → Set
+ Soundness c = (cs : CS) → (pos : ℕ × List ℕ) → (trace1 trace2 : List Field)
+   → PosCorrect pos
+   → proj₁ cs ≡ proj₁ pos
+   → WFCS (proj₂ cs) (proj₁ cs)
+   → length trace1 ≡ proj₁ (genCS c cs)
+   → length trace2 ≡ proj₁ cs
+   → WellFormedCircuit c pos  
+   → satCS (genCS c cs) trace1 ≡ true
+   → satCS cs trace2 ≡ true  
+   → projPos (proj₂ pos) trace1 ≡ projPos (proj₂ pos) trace2 
+   → satCS (genCS c cs) (genTrace c trace2) ≡ true
+       × (projPos (proj₂ (extInps c pos)) trace1 
+          ≡ projPos (proj₂ (extInps c pos)) ((genTrace c trace2)))
+
+
  extInpsMonotonic : (c : Circuit) → (pos : ℕ × List ℕ) → proj₁ pos ≤ proj₁ (extInps c pos)
  extInpsMonotonic empty pos = Data.Nat.Properties.≤-refl
  extInpsMonotonic (seq c₁ c₂) pos with extInpsMonotonic c₂ (extInps c₁ pos)
@@ -100,11 +130,6 @@ module SoundnessAndCompletenessCompose
  extInpsMonotonic (par c₁ c₂) pos with extInpsMonotonic c₂ (extInps c₁ pos)
  ... | o = Data.Nat.Properties.≤-trans (extInpsMonotonic c₁ pos) o 
  extInpsMonotonic (gate x) pos = extInpsMonotonic-gate x pos
-
-
- genCS-WFCS-weak : (n : ℕ) →  (cs : List Expr) → WFCS cs n → WFCS cs (suc n)
- genCS-WFCS-weak n [] wfcs = tt
- genCS-WFCS-weak n (c ∷ cs) wfcs = genCS-WFCS-weak-expr n c (proj₁ wfcs)  ,, genCS-WFCS-weak n cs (proj₂ wfcs)
 
 
  genCS-extInps-agree : (c : Circuit) → (cs : CS) → (pos : ℕ × List ℕ) 
@@ -126,8 +151,6 @@ module SoundnessAndCompletenessCompose
  aux' (par c₁ c₂) cs with aux' c₂ (genCS c₁ cs)
  ... | o = Data.Nat.Properties.≤-trans (aux' c₁ cs) o
 
- Weaker : ℕ × List ℕ → ℕ × List ℕ → Set
- Weaker pos pos' = (proj₁ pos ≤ proj₁ pos × ((x : ℕ) → x ∈ proj₂ pos → x ∈ proj₂ pos'))
 
  genCS-WFCS : (c : Circuit) → (pos : ℕ × List ℕ) → (cs : CS)
     → WellFormedCircuit c pos
@@ -135,7 +158,7 @@ module SoundnessAndCompletenessCompose
     → WFCS (proj₂ cs) (proj₁ cs)
     → WFCS (proj₂ (genCS c cs)) (proj₁ (genCS c cs))
  genCS-WFCS empty pos cs wfc wfcs pr = pr
- genCS-WFCS (gate x) pos cs wfc refl pr = genCS-WFCS-gate x pos cs wfc refl pr
+ genCS-WFCS (gate x) pos cs wfc refl pr =  genCS-WFCS-gate x pos cs wfc refl pr 
  genCS-WFCS (seq c c₁) pos@(.(proj₁ cs) ,, snd) cs wfc refl wfcs 
    = genCS-WFCS c₁ _  (genCS c cs) (proj₂ wfc) 
       (Eq.sym (genCS-extInps-agree c  cs pos refl)) 
@@ -145,28 +168,13 @@ module SoundnessAndCompletenessCompose
       (Eq.sym (genCS-extInps-agree c  cs pos refl)) 
       (genCS-WFCS c pos cs (proj₁ wfc) refl wfcs)
 
-
- lkpmb=eq : (x n : ℕ) → (trace : List Field) →  suc x ≤ n → lkpmb x trace ≡ lkpmb x (take n trace)
- lkpmb=eq x .(suc _) [] (s≤s prf) = refl
- lkpmb=eq zero .(suc _) (x₁ ∷ trace) (s≤s prf) = refl
- lkpmb=eq (suc x) .(suc _) (x₁ ∷ trace) (s≤s prf) = lkpmb=eq x _ trace prf
-
+ open import Extra
 
  lemm2 : (exprs : List Expr)(n : ℕ) → WFCS exprs n → (trace : List Field)
    → satCS' exprs trace ≡ satCS' exprs (take n trace)
  lemm2 [] n wf trace = refl
- lemm2 (e ∷ exprs) n wfcs trace rewrite lemm2 exprs n  (proj₂ wfcs) trace = lemm2-expr e n (proj₁ wfcs) trace
-
-
- and-lft : (a b : Bool) → a ∧ b ≡ true → a ≡ true
- and-lft true true p = refl
-
- and-rgt : (a b : Bool) → a ∧ b ≡ true → b ≡ true
- and-rgt true true p = refl
-
- and-int : (a b : Bool) → a ≡ true → b ≡ true → a ∧ b ≡ true
- and-int true true p1 p2 = refl
-
+ lemm2 (e ∷ exprs) n wfcs trace rewrite lemm2 exprs n  (proj₂ wfcs) trace rewrite lemm2-expr e n (proj₁ wfcs) trace   = refl 
+ 
  eq-leq : {a b : ℕ} → a ≡ b → a ≤ b
  eq-leq refl = Data.Nat.Properties.≤-refl
 
@@ -177,10 +185,6 @@ module SoundnessAndCompletenessCompose
  eq-eqb : {a b : ℕ} → a ≡ b → (a ≡ᵇ b) ≡ true
  eq-eqb {zero} {zero} p = refl
  eq-eqb {suc a} {suc .a} refl = eq-eqb {a} {a} refl
-
- mlength-++ : {A : Set} → (l1 l2 : List A) →  length (l1 ++ l2) ≡ length l1 + length l2
- mlength-++ [] l2 = refl
- mlength-++ (x ∷ l1) l2 = Eq.cong suc (mlength-++ l1 l2)
 
  take-len : {A : Set} → (l : List A) → (n : ℕ) → (n ≤ length l) →  length (take n l) ≡ n
  take-len [] .zero z≤n = refl
@@ -194,10 +198,6 @@ module SoundnessAndCompletenessCompose
  satCS'-weaken (seq c c₁) cs trace p = satCS'-weaken c _ trace (satCS'-weaken c₁ (genCS c cs) trace p)
  satCS'-weaken (par c c₁) cs trace p = satCS'-weaken c _ trace (satCS'-weaken c₁ (genCS c cs) trace p)
 
- aux2 : {A : Set} →  {n m : ℕ} → n ≤ m → (l : List A) → take n (take m l) ≡ take n l
- aux2 z≤n l = refl
- aux2 (s≤s p) [] = refl
- aux2 (s≤s p) (x ∷ l) rewrite aux2 p l = refl
 
  genCSMonotonic : (c : Circuit) → (cs : CS) → (proj₁ cs) ≤ (proj₁ (genCS c cs))
  genCSMonotonic empty cs = Data.Nat.Properties.≤-refl
@@ -207,10 +207,6 @@ module SoundnessAndCompletenessCompose
  genCSMonotonic (par c c₁) cs with genCSMonotonic c cs | genCSMonotonic c₁ (genCS c cs)
  ... | p₁ | p₂ = Data.Nat.Properties.≤-trans p₁ p₂
 
- aux4 : {A : Set} (n : ℕ) → (l : List A) → n ≤ length l → (length (take n l) ≡ᵇ n) ≡ true
- aux4 .zero [] z≤n = refl
- aux4 .zero (x ∷ l) z≤n = refl
- aux4 .(suc _) (x ∷ l) (s≤s prf) = aux4 _ l prf
 
  extInps-genTrace : (c : Circuit) → (trace : List Field) → (pos : ℕ × List ℕ) → proj₁ pos ≡ length trace
                       → proj₁ (extInps c pos) ≡ (length (genTrace c trace))
@@ -226,11 +222,6 @@ module SoundnessAndCompletenessCompose
  extInps-genTraceA empty trace pos pr = pr
  extInps-genTraceA (seq c c₁) trace pos pr = extInps-genTraceA c₁ (genTraceA c trace) _ (extInps-genTraceA c trace pos pr)
  extInps-genTraceA (par c c₁) trace pos pr = extInps-genTraceA c₁ (genTraceA c trace) _ (extInps-genTraceA c trace pos pr)
-
-
- lkp-p : (n : ℕ) → (t : List Field) → (x : Field) → length t ≡ n → lkp n (t ++ [ x ]) ≡ x
- lkp-p zero [] x pr = refl
- lkp-p (suc n) (x₁ ∷ t) x pr = lkp-p n t x (Eq.cong Data.Nat.pred pr)
 
 
  ext-lkp : (trace1 trace2 ext : List Field) → (x : ℕ)
@@ -259,14 +250,6 @@ module SoundnessAndCompletenessCompose
       q = ext-lkp trace1 trace2 ext  x₂ prf w
 
 
- proj-lem : (x : ℕ)
-  → (pos : List ℕ)
-  → (t1 t2 : List Field)
-  → x ∈ pos → projPos pos t1 ≡ projPos pos t2 → lkp x t1 ≡ lkp x t2
- proj-lem x .(x ∷ _) t1 t2 (here refl) prf = Eq.cong (λ x → fromMaybe zeroF (Data.List.head x)  ) prf
- proj-lem x .(_ ∷ _) t1 t2 (there xin) prf = proj-lem x _  t1 t2  xin (Eq.cong (Data.List.drop 1) prf)
-
-
  proj-cong : (c : Circuit) → (pos : ℕ × List ℕ) → (trace1 trace2 : List Field)
    → WellFormedCircuit c pos
    → projPos (proj₂ pos) trace1  ≡ projPos (proj₂ pos) trace2
@@ -287,18 +270,6 @@ module SoundnessAndCompletenessCompose
                     (Eq.sym (extInps-genTrace c trace2 pos (Eq.sym b)))
 
 
- Completeness : Circuit → Set
- Completeness c = (trace : Bool × List Field)
-   → (cs : CS)
-   → (pos : ℕ × List ℕ)
-   → WellFormedCircuit c pos
-   → WFCS (proj₂ cs) (proj₁ pos)
-   → length (proj₂ trace) ≡ proj₁ pos
-   → (proj₁ pos) ≡ proj₁ cs
-   → satCS cs (proj₂ trace) ≡ (proj₁ trace)
-   → satCS (genCS c cs) (proj₂ (genTraceA c trace)) ≡ proj₁ (genTraceA c trace)
-
-
  posCorr-extInps : (pos : ℕ × List ℕ) → (c : Circuit) → WellFormedCircuit c pos
    → PosCorrect pos → PosCorrect (extInps c pos)
  posCorr-extInps pos empty wf pc x y = pc x y
@@ -307,23 +278,6 @@ module SoundnessAndCompletenessCompose
                                            (posCorr-extInps pos c (proj₁ wf) pc) 
  posCorr-extInps pos (par c c₁) wf pc  = posCorr-extInps _ c₁ (proj₂ (proj₂ wf)) 
                                            (posCorr-extInps pos c (proj₁ wf) pc) 
-
-
-
- Soundness : Circuit → Set
- Soundness c = (cs : CS) → (pos : ℕ × List ℕ) → (trace1 trace2 : List Field)
-   → PosCorrect pos
-   → proj₁ cs ≡ proj₁ pos
-   → WFCS (proj₂ cs) (proj₁ cs)
-   → length trace1 ≡ proj₁ (genCS c cs)
-   → length trace2 ≡ proj₁ cs
-   → WellFormedCircuit c pos  
-   → satCS (genCS c cs) trace1 ≡ true
-   → satCS cs trace2 ≡ true  
-   → projPos (proj₂ pos) trace1 ≡ projPos (proj₂ pos) trace2 
-   → satCS (genCS c cs) (genTrace c trace2) ≡ true
-       × (projPos (proj₂ (extInps c pos)) trace1 
-          ≡ projPos (proj₂ (extInps c pos)) (genTrace c trace2))
 
 
  completeness-composable :  (c₁ c₂ : Circuit)

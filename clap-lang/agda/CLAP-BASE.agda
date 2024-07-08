@@ -4,6 +4,7 @@ open import Data.Nat using (ℕ; zero; suc; _<_; _≤_ ; _≤?_; z≤n; s≤s; _
 open import Data.Product renaming (_,_ to _,,_) hiding (map)
 open import Data.List renaming (map to mapₗ ; find to findₗ ; zip to zipₗ ; concat to concatₗ) hiding (fromMaybe)
 open import Data.Bool hiding (_≤_ ; _≤?_) renaming (_≟_ to _≟b_)
+open import Extra
 
 module CLAP-BASE (Field : Set) (zeroF :  Field)  (Gate : Set)(Expr : Set)
   (extInps-gate   : Gate → ℕ × List ℕ → ℕ × List ℕ)
@@ -66,10 +67,7 @@ WFCS [] n = ⊤
 WFCS (x ∷ xs) n = WFCS-expr x n × WFCS xs n
 
 lkp : ℕ → List Field → Field
-lkp zero [] = zeroF
-lkp zero (x ∷ l) = x
-lkp (suc x) [] = zeroF
-lkp (suc x) (x₁ ∷ l) = lkp x l
+lkp n t = lkp-gen zeroF n t
 
 genTrace : Circuit → List Field → List Field
 genTrace empty t = t
@@ -84,17 +82,6 @@ genCS (seq c c₁) cs = genCS c₁ (genCS c cs)
 genCS (par c c₁) cs = genCS c₁ (genCS c cs)
 genCS empty cs = cs
 
-lkpmb : ℕ → List Field → Maybe Field
-lkpmb zero [] = nothing
-lkpmb zero (x ∷ l) = just x
-lkpmb (suc x) [] = nothing
-lkpmb (suc x) (x₁ ∷ l) = lkpmb x l
-
-
-mb2b : Maybe Bool → Bool
-mb2b (just x) = x
-mb2b nothing = false
-
 
 genTraceA : Circuit → Bool × List Field → Bool × List Field
 genTraceA empty (b ,, t) = b ,, t
@@ -104,7 +91,7 @@ genTraceA (gate x) bt = genTraceAGate x bt
 
 satCS' : List Expr → List Field → Bool
 satCS' [] trace = true
-satCS' (x ∷ xs) trace = satCS'-expr x trace
+satCS' (x ∷ xs) trace = satCS'-expr x trace ∧ satCS' xs trace
 
 satCS : CS → List Field → Bool
 satCS (fst ,, snd) t = (length t ≡ᵇ fst) ∧ satCS' snd t
@@ -115,3 +102,5 @@ projPos (x ∷ n) l = lkp x l ∷ projPos n l
 
 PosCorrect : ℕ × List ℕ → Set
 PosCorrect pos = (x : ℕ) → x ∈ proj₂ pos → suc x ≤ proj₁ pos
+
+
