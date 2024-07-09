@@ -1,8 +1,10 @@
 use crate::expr::{Config, Constr, Gate, Name, NameContext, Trace, CV};
 use crate::table::{CVIdContainer, CsConfig, Table};
 use crate::{field::*, optimizer};
+use std::collections::HashSet;
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 pub type CVItem<F> = Box<dyn Gate<F>>;
 
@@ -10,8 +12,8 @@ pub type CVItem<F> = Box<dyn Gate<F>>;
 pub enum Circuit<F: Field + 'static> {
     Nil(PhantomData<F>),
     Gate(Box<dyn Gate<F>>),
-    Seq(Box<Self>, Box<Self>),
-    Par(Box<Self>, Box<Self>),
+    Seq(Arc<Self>, Arc<Self>),
+    Par(Arc<Self>, Arc<Self>),
 }
 
 impl<F: Field + 'static> fmt::Display for Circuit<F> {
@@ -93,12 +95,12 @@ impl<F: Field> Circuit<F> {
                 (Seq(_, _), true) => {
                     let r = result_stack.pop().unwrap();
                     let l = result_stack.pop().unwrap();
-                    result_stack.push(Seq(Box::new(l), Box::new(r)));
+                    result_stack.push(Seq(Arc::new(l), Arc::new(r)));
                 }
                 (Par(_, _), true) => {
                     let r = result_stack.pop().unwrap();
                     let l = result_stack.pop().unwrap();
-                    result_stack.push(Par(Box::new(l), Box::new(r)));
+                    result_stack.push(Par(Arc::new(l), Arc::new(r)));
                 }
             }
         }
@@ -109,7 +111,13 @@ impl<F: Field> Circuit<F> {
     fn gen_trace_aux(&self, config: &Config, ctxt: &mut NameContext<F>, t: &mut Trace<F>) -> bool {
         match self {
             Circuit::Nil(_) => true,
-            Circuit::Gate(e) => e.gen_trace(config, ctxt, t),
+            Circuit::Gate(e) => {
+                let b = e.gen_trace(config, ctxt, t);
+                if !b {
+                    println!("Gen trace failure: {:?}, trace:{:?}", e, t);
+                }
+                b
+            }
             Circuit::Seq(l, r) => {
                 let b1 = l.gen_trace_aux(config, ctxt, t);
                 let b2 = r.gen_trace_aux(config, ctxt, t);
@@ -141,6 +149,36 @@ impl<F: Field> Circuit<F> {
         }
     }
 
+    pub fn flatten_base_cases_iterative(
+        &self,
+        start_next: usize,
+    ) -> (usize, Vec<Box<dyn Gate<F>>>) {
+        let mut stack: Vec<Arc<Circuit<F>>> = vec![Arc::new(self.clone())];
+
+        let mut result: Vec<Box<dyn Gate<F>>> = Vec::new();
+        let next = start_next;
+
+        while let Some(current) = stack.pop() {
+            match &*current {
+                Self::Nil(_) => {
+                    // Handle Nil case, no gates to add
+                }
+                Self::Gate(gate) => {
+                    result.push(gate.clone());
+                }
+                Self::Seq(left, right) | Self::Par(left, right) => {
+                    // Push right then left to ensure left is processed first
+                    let right = Arc::clone(right);
+                    let left = Arc::clone(left);
+                    stack.push(right);
+                    stack.push(left);
+                }
+            }
+        }
+
+        (next, result)
+    }
+
     pub fn size(&self) -> usize {
         let mut c = 0;
         self.for_each(&mut |_| c += 1);
@@ -152,13 +190,15 @@ impl<F: Field> Circuit<F> {
         let mut i = 0;
         let mut done = false;
         let mut fin = self.clone();
+        let mut counter = optimizer::OptimizationCounter::new();
         while (!done) && i < max_iterations {
             let before_size = fin.size();
-            fin = optimizer::optimize::<F, 4>(&fin, config);
+            fin = optimizer::optimize::<F, 4>(&fin, config, &mut counter);
             let after_size = fin.size();
             i += 1;
             done = before_size == after_size;
         }
+        // println!("Optimization counter {:?}", counter);
         fin
     }
 
@@ -180,18 +220,35 @@ impl<F: Field> Circuit<F> {
         ctxt
     }
 
-    pub fn gen_cs(&self, config: &Config) -> Vec<Box<dyn CV<F>>> {
+    pub fn gen_cs(&self, config: &Config) -> (Vec<Box<dyn CV<F>>>, NameContext<F>) {
         let mut ctxt = self.inputs_ctxt();
-        let (_, base_cases) = self.flatten_base_cases(0);
-        base_cases
-            .into_iter()
-            .flat_map(|bc| bc.gen_cs(config, &mut ctxt))
-            .collect()
+        let (_, base_cases) = self.flatten_base_cases_iterative(0);
+        (
+            base_cases
+                .into_iter()
+                .flat_map(|bc| bc.gen_cs(config, &mut ctxt))
+                .collect(),
+            ctxt,
+        )
+    }
+
+    pub fn names(&self) -> Vec<Name> {
+        let mut names: HashSet<Name> = HashSet::new();
+        self.for_each(&mut |g| {
+            let vs = g.output_vars();
+            vs.iter().for_each(|n| {
+                names.insert(*n);
+            })
+        });
+        let mut v = vec![];
+        names.iter().for_each(|n| v.push(*n));
+        v.sort();
+        v
     }
 
     fn derive_config(&self, config: &Config) -> CsConfig {
         let mut gate_ids = CVIdContainer::empty();
-        let gates = self.gen_cs(config);
+        let (gates, _) = self.gen_cs(config);
         // Geometry is derived for now, could be checked instead
         let n_wires = gates.iter().fold(0, |acc_width, bc| {
             let w = bc.width();
@@ -210,14 +267,14 @@ impl<F: Field> Circuit<F> {
     }
 
     pub fn sat(&self, config: &Config, t: &Trace<F>) -> bool {
-        let gates = self.gen_cs(config);
+        let (gates, _) = self.gen_cs(config);
         gates.iter().all(|g| g.sat(t))
     }
 
     pub fn gen_table(&self, config: &Config) -> Table<Constr<F>> {
         let mut cs = vec![];
         let cs_config = self.derive_config(config);
-        let gates = self.gen_cs(config);
+        let (gates, _) = self.gen_cs(config);
         gates.iter().for_each(|g| {
             let c = g.gen_table(&cs_config);
             cs.extend(c)

@@ -1,7 +1,7 @@
 use std::vec;
 
 use crate::{
-    expr::{Config, Constr, Gate, Name, NameContext, Trace, CV},
+    expr::{apply_renaming, Config, Constr, Gate, Name, NameContext, Trace, CV},
     field::Field,
 };
 
@@ -40,6 +40,10 @@ impl<F: Field + 'static> CV<F> for BoolCheckCV {
 }
 
 impl<F: Field + 'static> Gate<F> for BoolCheck {
+    fn kind(&self) -> String {
+        "BoolCheck".into()
+    }
+
     fn gen_cs(&self, config: &Config, ctxt: &mut NameContext<F>) -> Vec<Box<dyn CV<F>>> {
         vec![Box::new(GBoolCheck(ctxt.get(self.0)))]
     }
@@ -53,8 +57,16 @@ impl<F: Field + 'static> Gate<F> for BoolCheck {
         vec![self.0]
     }
 
+    fn output_vars(&self) -> Vec<Name> {
+        vec![]
+    }
+
     fn clone_box(&self) -> Box<dyn Gate<F>> {
         Box::new(*self)
+    }
+
+    fn rename(&mut self, renaming: &crate::expr::Renaming) {
+        self.0 = apply_renaming(self.0, renaming)
     }
 }
 

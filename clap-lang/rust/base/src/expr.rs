@@ -11,6 +11,7 @@ pub struct NameContext<F: Field> {
     map: HashMap<Name, usize>,
     const_cache: HashMap<F, usize>,
     next: usize,
+    internal: usize,
 }
 
 impl<F: Field> NameContext<F> {
@@ -19,9 +20,17 @@ impl<F: Field> NameContext<F> {
             map: HashMap::new(),
             const_cache: HashMap::new(),
             next: 0,
+            internal: 0,
         }
     }
-    pub fn push(&mut self, k: Name) -> usize {
+
+    pub fn new_name(&mut self) -> Name {
+        let n = self.internal;
+        self.internal += 1;
+        Name::InternalW(n)
+    }
+
+    fn push_inner(&mut self, k: Name) -> usize {
         let pos = self.next;
         self.next += 1;
         self.map.insert(k, pos);
@@ -34,9 +43,24 @@ impl<F: Field> NameContext<F> {
         } else {
             match self.map.get(&i) {
                 Some(pos) => *pos,
-                None => self.push(i),
+                None => self.push_inner(i),
             }
         }
+    }
+
+    pub fn push_unused(&mut self) -> usize {
+        self.push_inner(Name::Unused)
+    }
+
+    pub fn push(&mut self, i: Name) -> usize {
+        self.get(i)
+    }
+
+    pub fn internal_name(&mut self) -> Name {
+        let pos = self.next;
+        let n = Name::InternalW(pos);
+        self.push(n);
+        n
     }
 
     pub fn allocate_pos(&mut self) -> usize {
@@ -47,7 +71,11 @@ impl<F: Field> NameContext<F> {
 
     pub fn read_name(&mut self, n: Name, trace: &Trace<F>) -> (bool, F) {
         let pos = self.get(n);
-        trace.read(pos)
+        let (b, f) = trace.read(pos);
+        if !b {
+            println!("read_name failed for name {:?} at pos {}", n, pos)
+        }
+        (b, f)
     }
 
     pub fn push_constant(&mut self, c: F) -> (usize, bool) {
@@ -63,7 +91,7 @@ impl<F: Field> NameContext<F> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Trace<T: Clone>(Vec<T>);
+pub struct Trace<T: Clone>(pub Vec<T>);
 
 impl<T: Field + Clone> Trace<T> {
     pub fn empty() -> Self {
@@ -80,12 +108,17 @@ impl<T: Field + Clone> Trace<T> {
             self.0.get(i).map_or((false, T::MONE), |f| (true, *f))
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, PartialOrd, Ord)]
 pub enum Name {
     Input(usize),
     Wire(usize),
+    InternalW(usize),
     Unused,
 }
 
@@ -98,6 +131,8 @@ impl Name {
 
     pub fn wire(&self) -> usize {
         if let Name::Wire(w) = *self {
+            w
+        } else if let Name::InternalW(w) = *self {
             w
         } else if let Name::Input(w) = *self {
             // TODO: we should explode here
@@ -134,15 +169,50 @@ pub trait CV<F: Field + 'static>: Downcast + Debug {
 }
 impl_downcast!(CV<F> where F :Field + 'static);
 
+pub type Renaming = HashMap<Name, Name>;
+
+pub fn apply_renaming(n: Name, renaming: &Renaming) -> Name {
+    *renaming.get(&n).unwrap_or(&n)
+}
+
 // Collection of constrained vectors
 // Also adds oracles
 // here we also add the "missing" new wires
 pub trait Gate<F: Field + 'static>: Debug + Downcast + fmt::Display {
+    fn kind(&self) -> String;
+
     fn gen_cs(&self, config: &Config, ctxt: &mut NameContext<F>) -> Vec<Box<dyn CV<F>>>;
 
     fn gen_trace(&self, config: &Config, ctxt: &mut NameContext<F>, trace: &mut Trace<F>) -> bool;
 
     fn input_vars(&self) -> Vec<Name>;
+
+    fn output_vars(&self) -> Vec<Name>;
+
+    // For optimization only
+    fn rename(&mut self, renaming: &Renaming);
+
+    fn other_params(&self) -> Vec<u8> {
+        vec![]
+    }
+
+    fn range_checks(&self) -> Vec<(Name, usize)> {
+        vec![]
+    }
+
+    fn range_checks_required(&self) -> Vec<(Name, usize)> {
+        vec![]
+    }
+
+    fn droppable_range_checks(&self) -> Vec<(Name, usize)> {
+        vec![]
+    }
+
+    fn no_range_checks_unsound(&mut self) {}
+
+    fn can_drop_range_checks(&self) -> bool {
+        false
+    }
 
     fn clone_box(&self) -> Box<dyn Gate<F>>;
 }

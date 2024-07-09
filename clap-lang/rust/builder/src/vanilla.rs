@@ -1,14 +1,23 @@
+use array_init::array_init;
 use base::circuit::{CVItem, Circuit};
-use base::cs_arith::GenericArith;
+use base::cs_arith::{Assertion, GenericArith};
 use base::cs_boolcheck::GBoolCheck;
+use base::cs_linear_combination::{AssertionLC, GLinearCombination};
 use base::cs_swap::Swap;
-use base::expr::Name;
-use base::field::Field;
+use base::expr::{Gate, Name};
+use base::field::{Field, SmallField};
+use base::flattened::Poseidon2Flattened;
 use base::gate_eq0::Eq0;
 use base::gate_inv::Inv;
 use base::gate_iszero::IsZero;
+use base::gate_limb_decomposition::LimbDecomposition;
+use base::gate_split_32::Split32;
+use base::gate_split_and_rotate::SplitAndRotate;
+use base::lookups::{Ch4, Maj4, Merge4BitChunk, TriXor4};
+use base::optimizer::Atomic;
 use std::marker::PhantomData;
 use std::mem::replace;
+use std::sync::Arc;
 use std::vec;
 
 pub trait Value<F: Field + 'static> {
@@ -32,8 +41,14 @@ pub trait Value<F: Field + 'static> {
 #[derive(Clone, Copy)]
 pub struct SValue {}
 
-#[derive(Clone, Copy)]
-pub struct SVar(Name);
+#[derive(Clone, Copy, Debug)]
+pub struct SVar(pub Name);
+
+impl From<SVar> for Name {
+    fn from(SVar(s): SVar) -> Self {
+        s
+    }
+}
 
 pub const DUMMY_SVAR: SVar = SVar(Name::Unused);
 
@@ -246,21 +261,25 @@ impl<F: Field, Fst: Value<F>, Snd: Value<F>> Value<F> for PairValue<F, Fst, Snd>
 
 pub trait Valuable<F: Field + 'static>: Sized {
     type V: Value<F> + Copy;
+    type Repr: Clone;
 
-    fn inject_structure(&self) -> Self::V;
-    fn inject_value(&self) -> Emb<F, Self>;
-    fn project_value(emb: &Emb<F, Self>) -> Self;
+    // fn inject_structure(&self) -> Self::V;
+    fn inject_repr(repr: Self::Repr) -> <Self::V as Value<F>>::Repr;
+    fn project_repr(repr: <Self::V as Value<F>>::Repr) -> Self::Repr;
+    fn inject_value(&self) -> <Self::V as Value<F>>::Emb;
+    fn project_value(emb: &<Self::V as Value<F>>::Emb) -> Self;
 
-    fn allocate(&self, start: usize) -> (Repr<F, Self>, usize) {
-        Self::V::allocate(start)
+    fn allocate(&self, start: usize) -> (Self::Repr, usize) {
+        let (repr, n) = Self::V::allocate(start);
+        (Self::project_repr(repr), n)
     }
 
     fn constant(&self, env: &mut Env<F>) -> Vec<CVItem<F>> {
         Self::V::constant(env, &self.inject_value())
     }
 
-    fn input(env: &mut TLEnv<F>) -> Repr<F, Self> {
-        Self::V::input(env)
+    fn input(env: &mut TLEnv<F>) -> Self::Repr {
+        Self::project_repr(Self::V::input(env))
     }
 
     fn serialize(&self) -> Vec<F> {
@@ -278,15 +297,25 @@ pub trait Valuable<F: Field + 'static>: Sized {
         t: Repr<F, Self>,
         e: Repr<F, Self>,
     ) -> Repr<F, Self> {
-        Self::V::ifthenelse(env, c, t, e)
+        Self::project_repr(Self::V::ifthenelse(
+            env,
+            c,
+            Self::inject_repr(t),
+            Self::inject_repr(e),
+        ))
     }
 }
 
 impl<F: Field + 'static> Valuable<F> for SValue {
     type V = Self;
+    type Repr = <Self as Value<F>>::Repr;
 
-    fn inject_structure(&self) -> Self::V {
-        *self
+    fn inject_repr(repr: Self::Repr) -> <Self::V as Value<F>>::Repr {
+        repr
+    }
+
+    fn project_repr(repr: <Self::V as Value<F>>::Repr) -> Self::Repr {
+        repr
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -301,9 +330,14 @@ impl<F: Field + 'static> Valuable<F> for SValue {
 
 impl<F: Field + 'static> Valuable<F> for bool {
     type V = Self;
+    type Repr = <Self as Value<F>>::Repr;
 
-    fn inject_structure(&self) -> Self::V {
-        *self
+    fn inject_repr(repr: Self::Repr) -> <Self::V as Value<F>>::Repr {
+        repr
+    }
+
+    fn project_repr(repr: <Self::V as Value<F>>::Repr) -> Self::Repr {
+        repr
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -317,13 +351,14 @@ impl<F: Field + 'static> Valuable<F> for bool {
 }
 
 #[allow(type_alias_bounds)]
-pub type Repr<F: Field, V: Valuable<F>> = <V::V as Value<F>>::Repr;
+pub type Repr<F: Field, V: Valuable<F>> = <V as Valuable<F>>::Repr;
 
 #[allow(type_alias_bounds)]
 pub type Emb<F: Field, V: Valuable<F>> = <V::V as Value<F>>::Emb;
 
+#[derive(Clone)]
 pub struct Env<F: Field + 'static> {
-    c: Circuit<F>,
+    pub c: Circuit<F>,
     next: usize,
 }
 
@@ -360,8 +395,8 @@ impl<F: Field + 'static> TLEnv<F> {
 
     fn append_par(&mut self, g: CVItem<F>) {
         self.c = Circuit::Par(
-            Box::new(replace(&mut self.c, Circuit::Nil(PhantomData))), // Temporarily replace `self.c` with a default value and use the old value
-            Box::new(Circuit::Gate(g)),
+            Arc::new(replace(&mut self.c, Circuit::Nil(PhantomData))), // Temporarily replace `self.c` with a default value and use the old value
+            Arc::new(Circuit::Gate(g)),
         )
     }
 }
@@ -389,15 +424,28 @@ impl<F: Field + 'static> Env<F> {
 
     fn append_par(&mut self, g: CVItem<F>) {
         self.c = Circuit::Par(
-            Box::new(replace(&mut self.c, Circuit::Nil(PhantomData))), // Temporarily replace `self.c` with a default value and use the old value
-            Box::new(Circuit::Gate(g)),
+            Arc::new(replace(&mut self.c, Circuit::Nil(PhantomData))), // Temporarily replace `self.c` with a default value and use the old value
+            Arc::new(Circuit::Gate(g)),
         )
     }
+
     fn append_seq(&mut self, g: CVItem<F>) {
         self.c = Circuit::Seq(
-            Box::new(replace(&mut self.c, Circuit::Nil(PhantomData))), // Temporarily replace `self.c` with a default value and use the old value
-            Box::new(Circuit::Gate(g)),
+            Arc::new(replace(&mut self.c, Circuit::Nil(PhantomData))), // Temporarily replace `self.c` with a default value and use the old value
+            Arc::new(Circuit::Gate(g)),
         )
+    }
+
+    fn append_seq_circ(&mut self, c: Circuit<F>) {
+        self.c = Circuit::Seq(
+            Arc::new(replace(&mut self.c, Circuit::Nil(PhantomData))), // Temporarily replace `self.c` with a default value and use the old value
+            Arc::new(c),
+        )
+    }
+
+    pub fn sync_env(&mut self, isolated: Env<F>) {
+        self.append_seq_circ(isolated.c);
+        self.next = isolated.next;
     }
 
     fn fresh(&mut self) -> Name {
@@ -411,7 +459,7 @@ impl<F: Field + 'static> Env<F> {
         let c = W::V::constant(self, &e);
         self.extend_par(c);
         self.next += added;
-        repr
+        W::project_repr(repr)
     }
 
     fn swap(&mut self, BoolVar(b): Repr<F, bool>, l: Name, r: Name) -> (Name, Name) {
@@ -424,6 +472,18 @@ impl<F: Field + 'static> Env<F> {
 
     pub fn eq0(&mut self, SVar(i): Repr<F, SValue>) {
         self.append_seq(Box::new(Eq0(i)))
+    }
+
+    pub fn assert_eq(&mut self, x: SVar, y: SVar) {
+        self.assert_custom(
+            x.into(),
+            x.into(),
+            F::ZERO,
+            F::ONE,
+            F::ZERO,
+            F::ZERO,
+            y.into(),
+        )
     }
 
     fn custom(&mut self, l: Name, r: Name, ql: F, qr: F, qm: F, qc: F) -> Repr<F, SValue> {
@@ -439,6 +499,57 @@ impl<F: Field + 'static> Env<F> {
         };
         self.append_seq(Box::new(e));
         SVar(o)
+    }
+
+    fn custom_arith_gate(
+        &mut self,
+        l: Name,
+        r: Name,
+        ql: F,
+        qr: F,
+        qm: F,
+        qc: F,
+    ) -> (Name, Box<dyn Gate<F>>) {
+        let o = self.fresh();
+        let e = GenericArith {
+            ql,
+            l,
+            qr,
+            r,
+            qm,
+            qc,
+            o,
+        };
+        (o, Box::new(e))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assert_custom_gate(
+        &mut self,
+        l: Name,
+        r: Name,
+        ql: F,
+        qr: F,
+        qm: F,
+        qc: F,
+        o: Name,
+    ) -> Box<dyn Gate<F>> {
+        let e = Assertion(GenericArith {
+            ql,
+            l,
+            qr,
+            r,
+            qm,
+            qc,
+            o,
+        });
+        Box::new(e)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assert_custom(&mut self, l: Name, r: Name, ql: F, qr: F, qm: F, qc: F, o: Name) {
+        let e = self.assert_custom_gate(l, r, ql, qr, qm, qc, o);
+        self.append_seq(e)
     }
 
     // For testing, less efficient than using BoolCheck
@@ -570,16 +681,23 @@ pub type PointS<F: Field> = Point<F>;
 
 mod private {
     use base::field::Fi64;
+    use boojum::field::goldilocks::GoldilocksField;
 
     pub trait Sealed {}
     impl Sealed for Fi64 {}
+    impl Sealed for GoldilocksField {}
 }
 
 impl<F: Field + 'static + private::Sealed> Valuable<F> for F {
     type V = SValue;
+    type Repr = SVar;
 
-    fn inject_structure(&self) -> Self::V {
-        SValue {}
+    fn inject_repr(repr: Self::Repr) -> <Self::V as Value<F>>::Repr {
+        repr
+    }
+
+    fn project_repr(repr: <Self::V as Value<F>>::Repr) -> Self::Repr {
+        repr
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -615,13 +733,22 @@ pub struct Line<F: Field> {
 
 impl<F: Field + 'static + private::Sealed> Valuable<F> for Line<F> {
     type V = PairValue<F, <PointS<F> as Valuable<F>>::V, <PointS<F> as Valuable<F>>::V>;
+    type Repr = <Self::V as Value<F>>::Repr;
 
-    fn inject_structure(&self) -> Self::V {
-        PairValue {
-            fst: Point::inject_structure(&self.p1),
-            snd: Point::inject_structure(&self.p2),
-            _phantom: PhantomData,
-        }
+    // fn inject_structure(&self) -> Self::V {
+    //     PairValue {
+    //         fst: Point::inject_structure(&self.p1),
+    //         snd: Point::inject_structure(&self.p2),
+    //         _phantom: PhantomData,
+    //     }
+    // }
+
+    fn inject_repr(repr: Self::Repr) -> <Self::V as Value<F>>::Repr {
+        repr
+    }
+
+    fn project_repr(repr: <Self::V as Value<F>>::Repr) -> Self::Repr {
+        repr
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -678,9 +805,18 @@ where
     <FF as Valuable<F>>::V: Value<F, Emb = C::Base>,
 {
     type V = PairValue<F, <FF as Valuable<F>>::V, <FF as Valuable<F>>::V>;
+    type Repr = (Repr<F, FF>, Repr<F, FF>);
 
-    fn inject_structure(&self) -> Self::V {
-        self.point.inject_structure()
+    // fn inject_structure(&self) -> Self::V {
+    //     self.point.inject_structure()
+    // }
+
+    fn inject_repr((x, y): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        (FF::inject_repr(x), FF::inject_repr(y))
+    }
+
+    fn project_repr((x, y): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        (FF::project_repr(x), FF::project_repr(y))
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -738,11 +874,23 @@ enum Status {
     Off,
 }
 
+#[derive(Clone, Copy)]
+pub struct StatusVar(Name);
+
 impl<F: Field + 'static> Valuable<F> for Status {
     type V = bool;
+    type Repr = StatusVar;
 
-    fn inject_structure(&self) -> Self::V {
-        false
+    // fn inject_structure(&self) -> Self::V {
+    //     false
+    // }
+
+    fn inject_repr(StatusVar(n): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        BoolVar(n)
+    }
+
+    fn project_repr(BoolVar(n): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        StatusVar(n)
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -828,9 +976,32 @@ impl<F: Field + 'static, T: Value<F> + Clone, const N: usize> Value<F> for [T; N
 
 impl<F: Field + 'static, T: Valuable<F> + Copy, const N: usize> Valuable<F> for [T; N] {
     type V = [T::V; N];
-    fn inject_structure(&self) -> Self::V {
-        self.map(|v| T::inject_structure(&v))
+    type Repr = [T::Repr; N];
+
+    // fn inject_structure(&self) -> Self::V {
+    //     self.map(|v| T::inject_structure(&v))
+    // }
+
+    fn input(env: &mut TLEnv<F>) -> Self::Repr {
+        let mut r: Vec<T::Repr> = vec![];
+        for _ in 0..N {
+            let i = T::input(env);
+            r.push(i)
+        }
+        match r.try_into() {
+            Ok(v) => v,
+            _ => unreachable!(),
+        }
     }
+
+    fn inject_repr(repr: Self::Repr) -> <Self::V as Value<F>>::Repr {
+        repr.map(|r| T::inject_repr(r))
+    }
+
+    fn project_repr(repr: <Self::V as Value<F>>::Repr) -> Self::Repr {
+        repr.map(|r| T::project_repr(r))
+    }
+
     fn inject_value(&self) -> Emb<F, Self> {
         self.map(|v| T::inject_value(&v))
     }
@@ -841,13 +1012,14 @@ impl<F: Field + 'static, T: Valuable<F> + Copy, const N: usize> Valuable<F> for 
 
 impl<F: Field + 'static, Fst: Valuable<F>, Snd: Valuable<F>> Valuable<F> for (Fst, Snd) {
     type V = PairValue<F, Fst::V, Snd::V>;
+    type Repr = (Fst::Repr, Snd::Repr);
 
-    fn inject_structure(&self) -> Self::V {
-        PairValue {
-            fst: Fst::inject_structure(&self.0),
-            snd: Snd::inject_structure(&self.1),
-            _phantom: PhantomData,
-        }
+    fn inject_repr((f, s): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        (Fst::inject_repr(f), Snd::inject_repr(s))
+    }
+
+    fn project_repr((f, s): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        (Fst::project_repr(f), Snd::project_repr(s))
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -859,11 +1031,47 @@ impl<F: Field + 'static, Fst: Valuable<F>, Snd: Valuable<F>> Valuable<F> for (Fs
     }
 }
 
+pub trait ScalarLike<F: Field + 'static>: Valuable<F> {
+    fn scalar(v: Repr<F, Self>) -> Repr<F, SValue>;
+}
+
+impl<F: Field + 'static> ScalarLike<F> for SValue {
+    fn scalar(v: Repr<F, Self>) -> Repr<F, SValue> {
+        v
+    }
+}
+#[derive(Clone, Copy)]
+pub struct U32Var(Name);
+
+#[allow(clippy::missing_safety_doc)]
+impl U32Var {
+    pub unsafe fn from_variable_unchecked(v: SVar) -> Self {
+        Self(v.0)
+    }
+}
+
+impl Default for U32Var {
+    fn default() -> Self {
+        U32Var(Name::Unused)
+    }
+}
+
+impl From<U32Var> for SVar {
+    fn from(U32Var(v): U32Var) -> Self {
+        SVar(v)
+    }
+}
+
 impl<F: Field + 'static> Valuable<F> for u32 {
     type V = SValue;
+    type Repr = U32Var;
 
-    fn inject_structure(&self) -> Self::V {
-        SValue {}
+    fn inject_repr(U32Var(n): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        SVar(n)
+    }
+
+    fn project_repr(SVar(n): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        U32Var(n)
     }
 
     fn inject_value(&self) -> Emb<F, Self> {
@@ -875,27 +1083,665 @@ impl<F: Field + 'static> Valuable<F> for u32 {
     }
 }
 
+impl<F: Field + 'static> ScalarLike<F> for u32 {
+    fn scalar(v: Repr<F, Self>) -> Repr<F, SValue> {
+        SVar(v.0)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct U16Var(Name);
+
+impl From<U16Var> for SVar {
+    fn from(U16Var(v): U16Var) -> Self {
+        SVar(v)
+    }
+}
+
+impl Default for U16Var {
+    fn default() -> Self {
+        U16Var(Name::Unused)
+    }
+}
+
+impl<F: Field + 'static> Valuable<F> for u16 {
+    type V = SValue;
+    type Repr = U16Var;
+
+    fn inject_repr(U16Var(n): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        SVar(n)
+    }
+
+    fn project_repr(SVar(n): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        U16Var(n)
+    }
+
+    fn inject_value(&self) -> Emb<F, Self> {
+        F::from_u32(*self as u32)
+    }
+
+    fn project_value(emb: &Emb<F, Self>) -> Self {
+        emb.to_u32() as u16
+    }
+}
+
+impl<F: Field + 'static> ScalarLike<F> for u16 {
+    fn scalar(v: Repr<F, Self>) -> Repr<F, SValue> {
+        SVar(v.0)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct U36(u64);
+
+#[derive(Clone, Copy)]
+pub struct U36Var(Name);
+
+impl<F: Field + 'static> Valuable<F> for U36 {
+    type V = SValue;
+    type Repr = U36Var;
+
+    fn inject_repr(U36Var(n): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        SVar(n)
+    }
+
+    fn project_repr(SVar(n): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        U36Var(n)
+    }
+
+    fn inject_value(&self) -> Emb<F, Self> {
+        F::from_u64(self.0)
+    }
+
+    fn project_value(emb: &Emb<F, Self>) -> Self {
+        Self(emb.to_u64())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct U4(u8);
+
+#[derive(Clone, Copy)]
+pub struct U4Var(Name);
+
+impl From<U4Var> for SVar {
+    fn from(U4Var(v): U4Var) -> Self {
+        SVar(v)
+    }
+}
+
+impl Default for U4Var {
+    fn default() -> Self {
+        U4Var(Name::Unused)
+    }
+}
+
+impl<F: Field + 'static> Valuable<F> for U4 {
+    type V = SValue;
+    type Repr = U4Var;
+
+    fn inject_repr(U4Var(n): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        SVar(n)
+    }
+
+    fn project_repr(SVar(n): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        U4Var(n)
+    }
+
+    fn inject_value(&self) -> Emb<F, Self> {
+        F::from_u64(self.0 as u64)
+    }
+
+    fn project_value(emb: &Emb<F, Self>) -> Self {
+        Self(emb.to_u64().try_into().unwrap())
+    }
+}
+
+impl<F: Field + 'static> ScalarLike<F> for U4 {
+    fn scalar(v: Repr<F, Self>) -> Repr<F, SValue> {
+        SVar(v.0)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct U8Var(Name);
+
+impl Default for U8Var {
+    fn default() -> Self {
+        U8Var(Name::Unused)
+    }
+}
+
+impl From<U8Var> for SVar {
+    fn from(U8Var(v): U8Var) -> Self {
+        SVar(v)
+    }
+}
+
+#[allow(clippy::missing_safety_doc)]
+impl U8Var {
+    pub unsafe fn from_variable_unchecked(v: SVar) -> Self {
+        Self(v.0)
+    }
+}
+
+impl<F: SmallField + 'static> Valuable<F> for u8 {
+    // TODO: automatic range checks for inputs?
+    type V = SValue;
+    type Repr = U8Var;
+
+    fn input(e: &mut TLEnv<F>) -> Self::Repr {
+        let repr = Name::Input(e.next);
+        e.next += 1;
+        let TLEnv { c, next, n_inputs } = e;
+        let mut tmp = Env {
+            c: c.clone(),
+            next: *next,
+        };
+        range_check_u8(&mut tmp, SVar(repr));
+        *e = TLEnv {
+            c: tmp.c,
+            next: tmp.next,
+            n_inputs: *n_inputs,
+        };
+        U8Var(repr)
+    }
+
+    fn inject_repr(U8Var(n): Self::Repr) -> <Self::V as Value<F>>::Repr {
+        SVar(n)
+    }
+
+    fn project_repr(SVar(n): <Self::V as Value<F>>::Repr) -> Self::Repr {
+        U8Var(n)
+    }
+
+    fn inject_value(&self) -> Emb<F, Self> {
+        F::from_u32(*self as u32)
+    }
+
+    fn project_value(emb: &Emb<F, Self>) -> Self {
+        emb.to_u32().try_into().unwrap()
+    }
+}
+
+impl<F: SmallField + 'static> ScalarLike<F> for u8 {
+    fn scalar(v: Repr<F, Self>) -> Repr<F, SValue> {
+        SVar(v.0)
+    }
+}
+
+pub fn split_36_bits<F: SmallField>(
+    cs: &mut Env<F>,
+    input: Repr<F, SValue>,
+) -> (Repr<F, u32>, Repr<F, U4>) {
+    let (u32_part, chunks, range_check) = range_check_36_bits_using_sha256_tables_gate(cs, input);
+    let low = u32_part;
+    let high = chunks[8];
+    let e = Split32 {
+        i: input.0,
+        oh: high.0,
+        ol: low.0,
+        range_check: Some(range_check),
+    };
+    cs.append_seq(Box::new(e));
+    (U32Var(low.0), U4Var(high.0))
+}
+
+pub fn tri_xor_many<F: SmallField, S: ScalarLike<F>, const N: usize>(
+    cs: &mut Env<F>,
+    a: &[Repr<F, S>; N],
+    b: &[Repr<F, S>; N],
+    c: &[Repr<F, S>; N],
+) -> [Repr<F, U4>; N] {
+    let result = array_init(|_| SVar(cs.fresh()));
+    for (((a, b), c), o) in a.iter().zip(b.iter()).zip(c.iter()).zip(result.iter()) {
+        let e = TriXor4 {
+            a: S::scalar(a.clone()).0,
+            b: S::scalar(b.clone()).0,
+            c: S::scalar(c.clone()).0,
+            o: o.0,
+        };
+        cs.append_seq(Box::new(e));
+    }
+    result.map(|SVar(x)| U4Var(x))
+}
+
+pub fn ch_many<F: SmallField, S: ScalarLike<F>, const N: usize>(
+    cs: &mut Env<F>,
+    a: &[Repr<F, S>; N],
+    b: &[Repr<F, S>; N],
+    c: &[Repr<F, S>; N],
+) -> [Repr<F, U4>; N] {
+    let result = array_init(|_| SVar(cs.fresh()));
+    for (((a, b), c), o) in a.iter().zip(b.iter()).zip(c.iter()).zip(result.iter()) {
+        let e = Ch4 {
+            a: S::scalar(a.clone()).0,
+            b: S::scalar(b.clone()).0,
+            c: S::scalar(c.clone()).0,
+            o: o.0,
+        };
+        cs.append_seq(Box::new(e));
+    }
+    result.map(|SVar(x)| U4Var(x))
+}
+
+pub fn maj_many<F: SmallField, S: ScalarLike<F>, const N: usize>(
+    cs: &mut Env<F>,
+    a: &[Repr<F, S>; N],
+    b: &[Repr<F, S>; N],
+    c: &[Repr<F, S>; N],
+) -> [Repr<F, U4>; N] {
+    let result = array_init(|_| SVar(cs.fresh()));
+    for (((a, b), c), o) in a.iter().zip(b.iter()).zip(c.iter()).zip(result.iter()) {
+        let e = Maj4 {
+            a: S::scalar(a.clone()).0,
+            b: S::scalar(b.clone()).0,
+            c: S::scalar(c.clone()).0,
+            o: o.0,
+        };
+        cs.append_seq(Box::new(e));
+    }
+    result.map(|SVar(x)| U4Var(x))
+}
+
+fn tri_xor_gate<F: SmallField>(
+    cs: &mut Env<F>,
+    a: Repr<F, SValue>,
+    b: Repr<F, SValue>,
+    c: Repr<F, SValue>,
+) -> Box<dyn Gate<F>> {
+    let o = cs.fresh();
+    let e = TriXor4 {
+        a: a.0,
+        b: b.0,
+        c: c.0,
+        o,
+    };
+    Box::new(e)
+}
+
+fn reduce_terms_gate<F: Field, S: ScalarLike<F>>(
+    cs: &mut Env<F>,
+    coeffs: [F; 4],
+    vars: [Repr<F, S>; 4],
+) -> (SVar, Box<dyn Gate<F>>) {
+    let o = cs.fresh();
+    let gate: GLinearCombination<F, Name, 4> = GLinearCombination {
+        coeffs,
+        vars: vars.map(|v| S::scalar(v).0),
+        o,
+    };
+    (SVar(o), Box::new(gate))
+}
+
+pub fn reduce_terms<F: Field, S: ScalarLike<F>>(
+    cs: &mut Env<F>,
+    coeffs: [F; 4],
+    vars: [Repr<F, S>; 4],
+) -> SVar {
+    let (o, g) = reduce_terms_gate::<F, S>(cs, coeffs, vars);
+    cs.append_seq(g);
+    o
+}
+
+pub fn reduce_terms_by_constant<F: Field, S: ScalarLike<F>>(
+    cs: &mut Env<F>,
+    reduction_constant: F,
+    terms: [Repr<F, S>; 4],
+) -> SVar {
+    let mut reduction_constants = [F::ZERO; 4];
+    reduction_constants[0] = F::ONE;
+    let mut current = F::ONE;
+    for dst in reduction_constants[1..].iter_mut() {
+        current = current * reduction_constant;
+        *dst = current;
+    }
+    reduce_terms::<F, S>(cs, reduction_constants, terms)
+}
+
+#[allow(clippy::type_complexity)]
+fn chunks_into_u16_low_high_gates<F: SmallField>(
+    cs: &mut Env<F>,
+    chunks: [Repr<F, U4>; 8],
+) -> (Repr<F, u16>, Repr<F, u16>, Vec<Box<dyn Gate<F>>>) {
+    let chunks = chunks.map(|n| SVar(n.0));
+    let to_u16_constants = [
+        F::ONE,
+        F::from_u64(1u64 << 4),
+        F::from_u64(1u64 << 8),
+        F::from_u64(1u64 << 12),
+    ];
+
+    let (SVar(low_u16), gate_1) = reduce_terms_gate::<F, SValue>(
+        cs,
+        to_u16_constants,
+        [chunks[0], chunks[1], chunks[2], chunks[3]],
+    );
+    let (SVar(high_u16), gate_2) = reduce_terms_gate::<F, SValue>(
+        cs,
+        to_u16_constants,
+        [chunks[4], chunks[5], chunks[6], chunks[7]],
+    );
+    (U16Var(low_u16), U16Var(high_u16), vec![gate_1, gate_2])
+}
+
+#[allow(clippy::type_complexity)]
+pub fn chunks_into_u16_low_high<F: SmallField>(
+    cs: &mut Env<F>,
+    chunks: [Repr<F, U4>; 8],
+) -> (Repr<F, u16>, Repr<F, u16>) {
+    let (low, high, gs) = chunks_into_u16_low_high_gates(cs, chunks);
+    gs.into_iter().for_each(|g| cs.append_seq(g));
+    (low, high)
+}
+
+#[allow(clippy::type_complexity)]
+fn range_check_36_bits_using_sha256_tables_gate<F: SmallField>(
+    cs: &mut Env<F>,
+    i: Repr<F, SValue>,
+) -> (Repr<F, u32>, [Repr<F, U4>; 9], Box<dyn Gate<F>>) {
+    let result: [SVar; 9] = array_init(|_| SVar(cs.fresh()));
+    let result_as_u4 = result.map(|SVar(x)| U4Var(x));
+    let (low_u16, high_u16, mut recomposition) =
+        chunks_into_u16_low_high_gates(cs, result_as_u4[..8].try_into().unwrap());
+    let (u32_part, g1) = cs.custom_arith_gate(
+        low_u16.0,
+        high_u16.0,
+        F::ONE,
+        F::from_u64(1u64 << 16),
+        F::ZERO,
+        F::ZERO,
+    );
+    // u32_part + 1<<32 * result[8] = input
+    let g2 = cs.assert_custom_gate(
+        u32_part,
+        result[8].0,
+        F::ONE,
+        F::from_u64(1u64 << 16),
+        F::ZERO,
+        F::ZERO,
+        i.0,
+    );
+    recomposition.push(g1);
+    recomposition.push(g2);
+    let e: LimbDecomposition<F, 9, 4> = LimbDecomposition {
+        i: i.0,
+        o: result.map(|v| v.0),
+        recomposition,
+        u4_rcs: result.map(|v| v.0).to_vec(),
+        u32_part: Some(u32_part),
+    };
+    (
+        U32Var(u32_part),
+        result.map(|SVar(x)| U4Var(x)),
+        Box::new(e),
+    )
+}
+
+pub fn range_check_36_bits_using_sha256_tables<F: SmallField>(
+    cs: &mut Env<F>,
+    i: Repr<F, SValue>,
+) -> (Repr<F, u32>, [Repr<F, U4>; 9]) {
+    let (u32_part, chunks, gate) = range_check_36_bits_using_sha256_tables_gate(cs, i);
+    cs.append_seq(gate);
+    (u32_part, chunks)
+}
+
+pub fn range_check_32_bits_using_sha256_tables<F: SmallField>(
+    cs: &mut Env<F>,
+    i: Repr<F, SValue>,
+) -> (Repr<F, u32>, [Repr<F, U4>; 8]) {
+    let chunks = uint32_into_4bit_chunks(cs, U32Var(i.0));
+    (U32Var(i.0), chunks)
+}
+
+pub fn uint32_into_4bit_chunks<F: SmallField>(
+    cs: &mut Env<F>,
+    i: Repr<F, u32>,
+) -> [Repr<F, U4>; 8] {
+    let result = array_init(|_| SVar(cs.fresh()));
+    let result_as_u4 = result.map(|SVar(x)| U4Var(x));
+    let (low_u16, high_u16, mut recomposition) = chunks_into_u16_low_high_gates(cs, result_as_u4);
+    // low_16 + 1<<16 * high_u16 = i
+    let g = cs.assert_custom_gate(
+        low_u16.0,
+        high_u16.0,
+        F::ONE,
+        F::from_u64(1u64 << 16),
+        F::ZERO,
+        F::ZERO,
+        i.0,
+    );
+    recomposition.push(g);
+    let e: LimbDecomposition<F, 8, 4> = LimbDecomposition {
+        i: i.0,
+        o: result.map(|v| v.0),
+        recomposition,
+        u4_rcs: result.map(|v| v.0).to_vec(),
+        u32_part: Some(i.0),
+    };
+    cs.append_seq(Box::new(e));
+    result.map(|SVar(x)| U4Var(x))
+}
+
+pub fn range_check_u8<F: SmallField>(cs: &mut Env<F>, i: Repr<F, SValue>) -> Repr<F, u8> {
+    let result = array_init(|_| SVar(cs.fresh()));
+    let g = cs.assert_custom_gate(
+        result[0].0,
+        result[1].0,
+        F::ONE,
+        F::from_u64(1u64 << 4),
+        F::ZERO,
+        F::ZERO,
+        i.0,
+    );
+    let recomposition = vec![g];
+    let e: LimbDecomposition<F, 2, 4> = LimbDecomposition {
+        i: i.0,
+        o: result.map(|v| v.0),
+        recomposition,
+        u4_rcs: result.map(|v| v.0).to_vec(),
+        u32_part: None,
+    };
+    cs.append_seq(Box::new(e));
+    U8Var(i.0)
+}
+
+fn merge_4bit_chunk_gate<F: SmallField, const SPLIT_AT: usize>(
+    cs: &mut Env<F>,
+    low: Repr<F, U4>,
+    high: Repr<F, U4>,
+    swap_output: bool,
+) -> (Repr<F, U4>, Box<dyn Gate<F>>) {
+    let reconstructed = cs.fresh();
+    let swapped = cs.fresh();
+    let e = Merge4BitChunk::<SPLIT_AT> {
+        low: low.0,
+        high: high.0,
+        reconstructed,
+        swapped,
+    };
+    let e = Box::new(e);
+    if swap_output {
+        (U4Var(swapped), e)
+    } else {
+        (U4Var(reconstructed), e)
+    }
+}
+
+pub fn merge_4bit_chunk<F: SmallField, const SPLIT_AT: usize>(
+    cs: &mut Env<F>,
+    low: Repr<F, U4>,
+    high: Repr<F, U4>,
+    swap_output: bool,
+) -> Repr<F, U4> {
+    let (x, _e) = merge_4bit_chunk_gate::<F, SPLIT_AT>(cs, low, high, swap_output);
+    x
+}
+
+#[allow(clippy::type_complexity)]
+pub fn split_and_rotate<F: SmallField>(
+    cs: &mut Env<F>,
+    input: Repr<F, u32>,
+    rotation: usize,
+) -> ([Repr<F, U4>; 8], Repr<F, U4>, Repr<F, U4>) {
+    let rotate_mod = rotation % 4;
+
+    let decompose_low = cs.fresh();
+    let aligned_variables: [SVar; 7] = array_init(|_| SVar(cs.fresh()));
+    let decompose_high = cs.fresh();
+
+    // Recomposition
+    let mut coeffs = [F::ZERO; 4];
+    let mut shift = 0;
+    for (idx, dst) in coeffs.iter_mut().enumerate() {
+        *dst = F::from_u64(1u64 << shift);
+
+        if idx == 0 {
+            shift += rotate_mod;
+        } else {
+            shift += 4;
+        }
+    }
+
+    let (t, g1) = reduce_terms_gate::<F, SValue>(
+        cs,
+        coeffs,
+        [
+            SVar(decompose_low),
+            aligned_variables[0],
+            aligned_variables[1],
+            aligned_variables[2],
+        ],
+    );
+
+    for (_idx, dst) in coeffs.iter_mut().enumerate().skip(1) {
+        *dst = F::from_u64(1u64 << shift);
+        shift += 4;
+    }
+    coeffs[0] = F::ONE;
+
+    let (t, g2) = reduce_terms_gate::<F, SValue>(
+        cs,
+        coeffs,
+        [
+            t,
+            aligned_variables[3],
+            aligned_variables[4],
+            aligned_variables[5],
+        ],
+    );
+
+    for (_idx, dst) in coeffs.iter_mut().enumerate().skip(1).take(2) {
+        *dst = F::from_u64(1u64 << shift);
+        shift += 4;
+    }
+    coeffs[0] = F::ONE;
+    coeffs[3] = F::ZERO;
+
+    let g3 = Box::new(AssertionLC(GLinearCombination {
+        coeffs,
+        // Use t in the last position as a dummy, it's multiplied
+        // by 0 anyways
+        vars: [t.0, aligned_variables[6].0, decompose_high, t.0],
+        o: input.0,
+    }));
+
+    // now we merge once, and leave other chunks aligned
+    let (merged, g4) = match rotate_mod {
+        1 => {
+            // 1 bit becomes high, so we swap inputs,
+            // and swap result
+            merge_4bit_chunk_gate::<_, 1>(cs, U4Var(decompose_low), U4Var(decompose_high), true)
+        }
+        2 => {
+            // here we can use as is
+            merge_4bit_chunk_gate::<_, 2>(cs, U4Var(decompose_high), U4Var(decompose_low), false)
+        }
+        3 => {
+            // 3 bit becomes high, so we do as is
+            merge_4bit_chunk_gate::<_, 1>(cs, U4Var(decompose_high), U4Var(decompose_low), false)
+        }
+        _ => unreachable!(),
+    };
+
+    // Add split_and_rotate gate
+
+    let (_, _, range_check) = range_check_36_bits_using_sha256_tables_gate(cs, input.into());
+
+    let recomposition = vec![g1, g2, g3, g4];
+
+    let e = SplitAndRotate {
+        rotation,
+        i: input.0,
+        aligned_variables: aligned_variables.map(|v| v.0),
+        decompose_low,
+        decompose_high,
+        range_check: Some(range_check),
+        recomposition,
+    };
+    cs.append_seq(Box::new(e));
+
+    let mut result: [U4Var; 8] = [U4Var(Name::Unused); 8];
+
+    // copy in proper places
+    let full_rotations = rotation / 4;
+    // e.g. if we rotate by 7, then 1st aligned variable will still become highest
+    for (idx, el) in aligned_variables.into_iter().enumerate() {
+        result[(8 - full_rotations + idx) % 8] = U4Var(el.0);
+    }
+    // and place merged piece
+    result[(8 - full_rotations - 1) % 8] = merged;
+
+    (result, U4Var(decompose_low), U4Var(decompose_high))
+}
+
+use base::optimizer::NF;
+
+pub fn poseidon2_flattened<F: Field + 'static>(
+    cs: &mut Env<F>,
+    inputs: [Repr<F, SValue>; 12],
+    outputs: [Repr<F, SValue>; 12],
+    atomics: Vec<Atomic<NF<F>>>,
+) {
+    let inputs: [Name; 12] = inputs.map(|s| s.into());
+    let outputs: [Name; 12] = outputs.map(|s| s.into());
+    let atomics: [Atomic<NF<F>>; 118] = atomics.try_into().unwrap();
+    let e = Poseidon2Flattened {
+        inputs,
+        outputs,
+        atomics,
+    };
+    cs.append_seq(Box::new(e))
+}
+
 #[cfg(test)]
 mod test {
     use base::field::Fi64;
+    use boojum::field::goldilocks::GoldilocksField;
 
     use super::*;
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct Foo {
         bar: [(u32, bool); 4],
-        baz: u32,
+        baz: u8,
     }
 
-    impl<F: Field + 'static> Valuable<F> for Foo {
+    impl<F: SmallField + 'static> Valuable<F> for Foo {
         type V = PairValue<F, [PairValue<F, SValue, bool>; 4], SValue>;
+        type Repr = Repr<F, ([(u32, bool); 4], u8)>;
 
-        fn inject_structure(&self) -> Self::V {
-            PairValue {
-                fst: self.bar.inject_structure(),
-                snd: <u32 as Valuable<F>>::inject_structure(&self.baz),
-                _phantom: PhantomData,
-            }
+        fn inject_repr((pairs, snd): Self::Repr) -> <Self::V as Value<F>>::Repr {
+            let fst = <[(u32, bool); 4] as Valuable<F>>::inject_repr(pairs);
+            let snd = <u8 as Valuable<F>>::inject_repr(snd);
+            (fst, snd)
+        }
+
+        fn project_repr((pairs, snd): <Self::V as Value<F>>::Repr) -> Self::Repr {
+            let fst = <[(u32, bool); 4] as Valuable<F>>::project_repr(pairs);
+            let snd = <u8 as Valuable<F>>::project_repr(snd);
+            (fst, snd)
         }
 
         fn inject_value(&self) -> Emb<F, Self> {
@@ -905,7 +1751,7 @@ mod test {
         fn project_value(emb: &Emb<F, Self>) -> Self {
             Self {
                 bar: <[(u32, bool); 4] as Valuable<F>>::project_value(&emb.0),
-                baz: <u32 as Valuable<F>>::project_value(&emb.1),
+                baz: <u8 as Valuable<F>>::project_value(&emb.1),
             }
         }
     }
@@ -917,13 +1763,13 @@ mod test {
             baz: 42,
         };
         println!("initial: {:?}", dummy);
-        let serialized: Vec<Fi64> = dummy.serialize();
+        let serialized: Vec<GoldilocksField> = dummy.serialize();
         println!("serialized: {:?}", serialized);
-        let (deserialized, rest) = <Foo as Valuable<Fi64>>::deserialize(serialized);
+        let (deserialized, rest) = <Foo as Valuable<GoldilocksField>>::deserialize(serialized);
         println!("deserialized: {:?}", deserialized);
         println!("rest: {:?}", rest);
         assert_eq!(deserialized, dummy);
-        assert_eq!(rest, vec![])
+        assert!(rest.is_empty())
     }
 
     fn add_point_spec<F: Field>(p1: PointS<F>, p2: PointS<F>) -> PointS<F> {

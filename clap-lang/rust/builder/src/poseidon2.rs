@@ -1,32 +1,50 @@
+use std::marker::PhantomData;
+
 use crate::poseidon2_params::*;
 use crate::vanilla;
-use base::field::Fi64;
+use base::expr::Name;
 use base::field::Field;
+use boojum::field::goldilocks::GoldilocksField;
 use vanilla::*;
 
-type F = Fi64;
+type F = GoldilocksField;
 
 pub type State = [Repr<F, SValue>; 12];
 
 const NUM_FULL_ROUNDS: usize = NUM_FULL_ROUNDS_TOTAL;
 
-pub fn compute_round_function(cs: &mut Env<F>, input: State) -> State {
+pub fn compute_round_function(cs: &mut Env<F>, input: State, flatten: bool) -> State {
+    // Temporarily collect the circuit in isolation, in case we want
+    // to flatten it
+    let mut tmp_cs = cs.clone();
+    tmp_cs.c = base::circuit::Circuit::Nil(PhantomData);
+
     let mut state = input;
     let mut round_counter = 0;
 
     // first external MDS
-    mul_by_external_matrix(cs, &mut state);
+    mul_by_external_matrix(&mut tmp_cs, &mut state);
+
     for _ in 0..NUM_FULL_ROUNDS / 2 {
-        full_round(cs, &mut state, &mut round_counter);
+        full_round(&mut tmp_cs, &mut state, &mut round_counter);
     }
+
     round_counter -= NUM_FULL_ROUNDS / 2;
     for _ in 0..NUM_PARTIAL_ROUNDS {
-        partial_round(cs, &mut state, &mut round_counter);
+        partial_round(&mut tmp_cs, &mut state, &mut round_counter);
     }
+
     round_counter -= NUM_PARTIAL_ROUNDS;
     round_counter += NUM_FULL_ROUNDS / 2;
     for _ in 0..NUM_FULL_ROUNDS / 2 {
-        full_round(cs, &mut state, &mut round_counter);
+        full_round(&mut tmp_cs, &mut state, &mut round_counter);
+    }
+
+    if flatten {
+        let atomics = base::optimizer::inline_atomics(tmp_cs.c, state.map(|s| s.into()).to_vec());
+        poseidon2_flattened(cs, input, state, atomics)
+    } else {
+        cs.sync_env(tmp_cs)
     }
 
     state
@@ -44,7 +62,7 @@ fn mul_by_external_matrix(cs: &mut Env<F>, state: &mut State) {
     for (dst, src) in tmp.array_chunks_mut::<4>().zip(state.array_chunks::<4>()) {
         for (dst, coeffs) in dst.iter_mut().zip(EXTERNAL_MDS_MATRIX_BLOCK.iter()) {
             let v: Vec<(SVar, F)> = (*src).into_iter().zip(*coeffs).collect();
-            *dst = cs.linear_combination(v);
+            *dst = cs.linear_combination(v.clone());
         }
     }
 
@@ -86,13 +104,14 @@ fn mul_by_inner_matrix(cs: &mut Env<F>, state: &mut State) {
     }
 }
 
-fn full_round(cs: &mut Env<F>, state: &mut State, full_round_counter: &mut usize) {
+fn full_round(cs: &mut Env<F>, state: &mut State, full_round_counter: &mut usize) -> Vec<Name> {
     // apply non-linearity
     // multiply by MDS
-    apply_nonlinearity(cs, state, full_round_counter);
+    let to_reset = apply_nonlinearity(cs, state, full_round_counter);
     // Mul by external matrix
     mul_by_external_matrix(cs, state);
     *full_round_counter += 1;
+    to_reset
 }
 
 fn pow_7(cs: &mut Env<F>, x: &mut Repr<F, SValue>) {
@@ -102,7 +121,7 @@ fn pow_7(cs: &mut Env<F>, x: &mut Repr<F, SValue>) {
     *x = cs.mul(quad, third);
 }
 
-fn partial_round(cs: &mut Env<F>, state: &mut State, partial_round_counter: &mut usize) {
+fn partial_round(cs: &mut Env<F>, state: &mut State, partial_round_counter: &mut usize) -> Name {
     // add constants
     // apply non-linearity
     // multiply by MDS
@@ -111,17 +130,24 @@ fn partial_round(cs: &mut Env<F>, state: &mut State, partial_round_counter: &mut
     // only first element undergoes non-linearity
     // now just raise to the power
     // with FMA of the form c0 * A * B + c1 * D and we can not make a term of (A + k) ^ k
+    let to_reset = state[0];
     state[0] = cs.add_constant(state[0], round_constant);
     pow_7(cs, &mut state[0]);
 
     mul_by_inner_matrix(cs, state);
 
     *partial_round_counter += 1;
+    to_reset.into()
 }
 
-fn apply_nonlinearity(cs: &mut Env<F>, state: &mut State, full_round_counter: &mut usize) {
+fn apply_nonlinearity(
+    cs: &mut Env<F>,
+    state: &mut State,
+    full_round_counter: &mut usize,
+) -> Vec<Name> {
     let round_constants = FULL_ROUND_CONSTANTS[..][*full_round_counter];
     // with FMA of the form c0 * A * B + c1 * D and we can not make a term of (A + k) ^ k
+    let to_reset: Vec<Name> = state.map(|s| s.into()).to_vec();
 
     for (a, b) in state.iter_mut().zip(round_constants.iter()) {
         *a = cs.add_constant(*a, *b);
@@ -130,4 +156,5 @@ fn apply_nonlinearity(cs: &mut Env<F>, state: &mut State, full_round_counter: &m
     for dst in state.iter_mut() {
         pow_7(cs, dst);
     }
+    to_reset
 }

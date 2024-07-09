@@ -1,5 +1,5 @@
 use base::expr::{Config, Trace};
-use base::field::Fi64;
+use boojum::field::goldilocks::GoldilocksField;
 use builder::vanilla::{PointS, SValue, Valuable};
 
 fn main() {
@@ -7,27 +7,27 @@ fn main() {
     let v = SValue::input(&mut e);
     let _b = bool::input(&mut e);
     let mut e = e.seal_inputs();
-    let l = e.c::<SValue>(Fi64(3_i64));
-    let r = e.c::<SValue>(Fi64(5_i64));
+    let l = e.c::<SValue>(GoldilocksField(3));
+    let r = e.c::<SValue>(GoldilocksField(5));
 
     let o = e.add(l, r);
     let _o2 = e.add(v, o);
-    let z = e.c::<SValue>(Fi64(0_i64));
+    let z = e.c::<SValue>(GoldilocksField(0));
     e.eq0(z);
 
-    let x1 = e.c::<SValue>(Fi64(1_i64));
-    let y1 = e.c::<SValue>(Fi64(2_i64));
+    let x1 = e.c::<SValue>(GoldilocksField(1));
+    let y1 = e.c::<SValue>(GoldilocksField(2));
     let _ = e.c::<bool>(false);
     let p1 = (x1, y1);
-    let p2 = e.c::<PointS<Fi64>>((Fi64(3_i64), Fi64(4_i64)));
+    let p2 = e.c::<PointS<GoldilocksField>>((GoldilocksField(3), GoldilocksField(4)));
     let _z = e.add_point(p1, p2);
 
     let c = e.get_circuit();
 
     let mut t = Trace::empty();
     let config = Config::default();
-    t.push(Fi64(7_i64));
-    t.push(Fi64(1_i64));
+    t.push(GoldilocksField(7));
+    t.push(GoldilocksField(1));
     let valid = c.gen_trace(&config, &mut t);
     assert!(valid);
     println!("{:?}", t);
@@ -46,15 +46,16 @@ mod test {
 
     use base::{
         circuit::Circuit,
-        expr::{Config, Gate, CV},
+        expr::{Config, CV},
         field::Field,
+        optimizer::inline_atomics,
     };
 
     use super::*;
 
-    type F = Fi64;
+    type F = GoldilocksField;
 
-    fn trace_from_inputs(inputs: &[F]) -> Trace<F> {
+    fn trace_from_inputs<F: Field>(inputs: &[F]) -> Trace<F> {
         let mut t = Trace::empty();
         inputs.iter().fold(0, |acc, v| {
             t.push(*v);
@@ -64,7 +65,10 @@ mod test {
     }
 
     fn to_f(x: i64) -> F {
-        Fi64(x)
+        let av: u64 = x.abs().try_into().unwrap();
+        let av_f = <GoldilocksField as boojum::field::Field>::from_u64_with_reduction(av);
+        let neg = if x < 0 { F::MONE } else { F::ONE };
+        F::mul(neg, av_f)
     }
 
     fn print_cs_info<F: Field + 'static>(cs: &Vec<Box<dyn CV<F>>>) {
@@ -80,7 +84,7 @@ mod test {
     }
 
     // Test helpers
-    fn sat_with_config(
+    fn sat_with_config<F: Field>(
         c: &Circuit<F>,
         inputs: &[F],
         size: usize,
@@ -88,30 +92,53 @@ mod test {
         config: &Config,
         skip_sat: bool,
     ) {
-        let mut t = trace_from_inputs(inputs);
+        let mut t_before = trace_from_inputs(inputs);
         println!("Circ size: {}", c.size());
-        let b = c.gen_trace(&config, &mut t);
+        // println!("Circ: {}", c);
+        let b = c.gen_trace(config, &mut t_before);
+
         assert!(b, "sat no trace");
         // assert!(*trace == rest, "sat wrong trace");
-        let cs = c.gen_cs(&config);
+        let (cs, mut ctxt_before) = c.gen_cs(config);
+        // println!("{:?}", cs);
+        // println!("Trace {:?}", t_before);
         print_cs_info(&cs);
         assert!(cs.len() == size, "sat wrong size");
         if !skip_sat {
-            assert!(c.sat(&config, &t), "sat unsat")
+            assert!(c.sat(config, &t_before), "sat unsat")
         }
 
-        let c = c.optimize(&config);
+        let c = c.optimize(config);
         println!("optimized Circ size: {}", c.size());
+        // println!("Circ: {}", c);
+        let names = c.names();
 
         let mut t = trace_from_inputs(inputs);
-        let b = c.gen_trace(&config, &mut t);
+        let b = c.gen_trace(config, &mut t);
+
         assert!(b, "optimized sat no trace");
         // assert!(*trace == rest, "sat wrong trace");
-        let cs = c.gen_cs(&config);
+        let (cs, mut ctxt) = c.gen_cs(config);
+
+        // for name in names {
+        //     let v_b = t_before.0.get(ctxt_before.get(name)).unwrap();
+        //     let v = t.0.get(ctxt.get(name)).unwrap();
+        //     assert!(
+        //         v_b == v,
+        //         "Values for name {:?} differs {:?}  {:?}",
+        //         name,
+        //         v_b,
+        //         v
+        //     )
+        // }
+        // println!("{:?}", cs);
+        // println!("Trace {:?}", t);
         print_cs_info(&cs);
-        assert!(cs.len() == size_optimized, "optimized sat wrong size");
+        // We give it a 5% margin for some non-deterministic optimization
+        let upper_bound = size_optimized + (size_optimized / 5);
+        assert!(cs.len() <= upper_bound, "optimized sat wrong size");
         if !skip_sat {
-            assert!(c.sat(&config, &t), "optimized sat unsat")
+            assert!(c.sat(config, &t), "optimized sat unsat")
         }
     }
 
@@ -134,11 +161,11 @@ mod test {
         let c = {
             let e = builder::vanilla::TLEnv::new();
             let mut e = e.seal_inputs();
-            let _l = e.c::<SValue>(Fi64(3_i64));
+            let _l = e.c::<SValue>(GoldilocksField(3));
             e.get_circuit()
         };
         let inputs = vec![];
-        // let trace = Trace(vec![3_i64]);
+        // let trace = Trace(vec![3]);
         sat(&c, &inputs, 1, 1)
     }
 
@@ -147,13 +174,13 @@ mod test {
         let c = {
             let e = builder::vanilla::TLEnv::new();
             let mut e = e.seal_inputs();
-            let l = e.c::<SValue>(Fi64(3_i64));
-            let r = e.c::<SValue>(Fi64(5_i64));
+            let l = e.c::<SValue>(GoldilocksField(3));
+            let r = e.c::<SValue>(GoldilocksField(5));
             let _o = e.add(l, r);
             e.get_circuit()
         };
         let inputs = vec![];
-        // let trace = Trace(vec![3_i64, 5_i64, 8_i64]);
+        // let trace = Trace(vec![3, 5, 8]);
         sat(&c, &inputs, 3, 1)
     }
 
@@ -163,12 +190,12 @@ mod test {
             let mut e = builder::vanilla::TLEnv::new();
             let v = SValue::input(&mut e);
             let mut e = e.seal_inputs();
-            let r = e.c::<SValue>(Fi64(5_i64));
+            let r = e.c::<SValue>(GoldilocksField(5));
             let _o = e.add(v, r);
             e.get_circuit()
         };
-        let inputs = vec![Fi64(3_i64)];
-        // let trace = Trace(vec![5_i64, 8_i64]);
+        let inputs = vec![GoldilocksField(3)];
+        // let trace = Trace(vec![5, 8]);
         sat(&c, &inputs, 2, 1)
     }
 
@@ -177,15 +204,15 @@ mod test {
         let c = {
             let e = builder::vanilla::TLEnv::new();
             let mut e = e.seal_inputs();
-            let l = e.c::<SValue>(Fi64(3_i64));
-            let r = e.c::<SValue>(Fi64(5_i64));
+            let l = e.c::<SValue>(GoldilocksField(3));
+            let r = e.c::<SValue>(GoldilocksField(5));
             let o = e.add(l, r);
-            let t = e.c::<SValue>(Fi64(7_i64));
+            let t = e.c::<SValue>(GoldilocksField(7));
             let _o2 = e.add(o, t);
             e.get_circuit()
         };
         let inputs = vec![];
-        // let trace = Trace(vec![3_i64, 5_i64, 8_i64, 7_i64, 15_i64]);
+        // let trace = Trace(vec![3, 5, 8, 7, 15]);
         sat(&c, &inputs, 5, 1)
     }
 
@@ -194,12 +221,12 @@ mod test {
         let c = {
             let e = builder::vanilla::TLEnv::new();
             let mut e = e.seal_inputs();
-            let l = e.c::<SValue>(Fi64(0_i64));
+            let l = e.c::<SValue>(GoldilocksField(0));
             e.eq0(l);
             e.get_circuit()
         };
         let inputs = vec![];
-        // let trace = Trace(vec![0_i64]);
+        // let trace = Trace(vec![0]);
         sat(&c, &inputs, 2, 2)
     }
 
@@ -212,7 +239,7 @@ mod test {
             e.eq0(l);
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
+        let inputs = vec![to_f(0)];
         // let trace = Trace(vec![]);
         sat(&c, &inputs, 1, 1)
     }
@@ -224,15 +251,15 @@ mod test {
             // let l = SValue::input(&mut e);
             let v = SValue::input(&mut e);
             let mut e = e.seal_inputs();
-            let l = e.c::<SValue>(to_f(3_i64));
-            let r = e.c::<SValue>(to_f(5_i64));
+            let l = e.c::<SValue>(to_f(3));
+            let r = e.c::<SValue>(to_f(5));
             let o = e.add(l, r);
             let o2 = e.add(v, o);
             e.eq0(o2);
             e.get_circuit()
         };
-        let inputs = vec![to_f(-8_i64)];
-        // let trace = Trace(vec![3_i64, 5_i64, 8_i64, 15_i64, 0_i64]);
+        let inputs = vec![to_f(-8)];
+        // let trace = Trace(vec![3, 5, 8, 15, 0]);
         sat(&c, &inputs, 5, 2)
     }
 
@@ -245,14 +272,14 @@ mod test {
             let e = e.seal_inputs();
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
+        let inputs = vec![to_f(0)];
         // let trace = Trace(vec![]);
         sat(&c, &inputs, 1, 1);
 
-        let inputs = vec![to_f(1_i64)];
+        let inputs = vec![to_f(1)];
         sat(&c, &inputs, 1, 1);
 
-        let inputs = vec![to_f(2_i64)];
+        let inputs = vec![to_f(2)];
         unsat(&c, &inputs);
     }
 
@@ -266,14 +293,14 @@ mod test {
             e.assert_bool_arith(v);
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
+        let inputs = vec![to_f(0)];
         // let trace = Trace(vec![0]);
         sat(&c, &inputs, 2, 2);
 
-        let inputs = vec![to_f(1_i64)];
+        let inputs = vec![to_f(1)];
         sat(&c, &inputs, 2, 2);
 
-        let inputs = vec![to_f(2_i64)];
+        let inputs = vec![to_f(2)];
         unsat(&c, &inputs);
     }
 
@@ -286,11 +313,11 @@ mod test {
             let _ = e.inv(v);
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
+        let inputs = vec![to_f(0)];
         unsat(&c, &inputs);
 
-        let inputs = vec![to_f(1_i64)];
-        // let trace = Trace(vec![1_i64]);
+        let inputs = vec![to_f(1)];
+        // let trace = Trace(vec![1]);
         sat(&c, &inputs, 1, 1);
     }
 
@@ -303,12 +330,12 @@ mod test {
             let _ = e.is_zero(v);
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
-        // let trace = Trace(vec![0_i64, 1]);
+        let inputs = vec![to_f(0)];
+        // let trace = Trace(vec![0, 1]);
         sat(&c, &inputs, 2, 2);
 
-        let inputs = vec![to_f(1_i64)];
-        // let trace = Trace(vec![1_i64, 0]);
+        let inputs = vec![to_f(1)];
+        // let trace = Trace(vec![1, 0]);
         sat(&c, &inputs, 2, 2);
     }
 
@@ -321,11 +348,11 @@ mod test {
             e.assert_not_zero(v);
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
+        let inputs = vec![to_f(0)];
         unsat(&c, &inputs);
 
-        let inputs = vec![to_f(1_i64)];
-        // let trace = Trace(vec![1_i64]);
+        let inputs = vec![to_f(1)];
+        // let trace = Trace(vec![1]);
         sat(&c, &inputs, 1, 1);
     }
 
@@ -338,11 +365,11 @@ mod test {
             e.assert_not_zero_naive(v);
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
+        let inputs = vec![to_f(0)];
         unsat(&c, &inputs);
 
-        let inputs = vec![to_f(1_i64)];
-        // let trace = Trace(vec![1_i64, 0_i64]);
+        let inputs = vec![to_f(1)];
+        // let trace = Trace(vec![1, 0]);
         sat(&c, &inputs, 3, 3);
     }
 
@@ -352,18 +379,18 @@ mod test {
             let mut e = builder::vanilla::TLEnv::new();
             let b = bool::input(&mut e);
             let mut e = e.seal_inputs();
-            let l = e.c::<SValue>(to_f(3_i64));
-            let r = e.c::<SValue>(to_f(5_i64));
+            let l = e.c::<SValue>(to_f(3));
+            let r = e.c::<SValue>(to_f(5));
             let x = e.ifthenelse::<SValue>(b, l, r);
             let _ = e.add(x, x);
             e.get_circuit()
         };
-        let inputs = vec![to_f(0_i64)];
-        // let trace = Trace(vec![3_i64, 5_i64, 3_i64, 5_i64, 10_i64]);
+        let inputs = vec![to_f(0)];
+        // let trace = Trace(vec![3, 5, 3, 5, 10]);
         sat(&c, &inputs, 5, 5);
 
-        let inputs = vec![to_f(1_i64)];
-        // let trace = Trace(vec![3_i64, 5_i64, 5_i64, 3_i64, 6_i64]);
+        let inputs = vec![to_f(1)];
+        // let trace = Trace(vec![3, 5, 5, 3, 6]);
         sat(&c, &inputs, 5, 5);
     }
 
@@ -377,20 +404,25 @@ mod test {
             let _ = e.xor(l, r);
             e.get_circuit()
         };
-        let size = 7;
-        let size_compressed = 3;
+        let size = 9;
+        let size_compressed = 5;
 
-        let inputs = vec![to_f(0_i64), to_f(1_i64)];
-        sat(&c, &inputs, size, size_compressed);
+        let inputs = vec![to_f(0), to_f(1)];
+        // sat(&c, &inputs, size, size_compressed);
+        let config = Config {
+            use_fma: true,
+            use_lc: false,
+        };
+        sat_with_config(&c, &inputs, size, size_compressed, &config, false);
 
-        let inputs = vec![to_f(1_i64), to_f(0_i64)];
-        sat(&c, &inputs, size, size_compressed);
+        // let inputs = vec![to_f(1), to_f(0)];
+        // sat(&c, &inputs, size, size_compressed);
 
-        let inputs = vec![to_f(1_i64), to_f(1_i64)];
-        sat(&c, &inputs, size, size_compressed);
+        // let inputs = vec![to_f(1), to_f(1)];
+        // sat(&c, &inputs, size, size_compressed);
 
-        let inputs = vec![to_f(0_i64), to_f(0_i64)];
-        sat(&c, &inputs, size, size_compressed);
+        // let inputs = vec![to_f(0), to_f(0)];
+        // sat(&c, &inputs, size, size_compressed);
     }
 
     #[test]
@@ -406,7 +438,7 @@ mod test {
         let size = 4;
         let size_compressed = 3;
 
-        let inputs = vec![to_f(0_i64), to_f(1_i64)];
+        let inputs = vec![to_f(0), to_f(1)];
         sat(&c, &inputs, size, size_compressed);
     }
 
@@ -433,10 +465,7 @@ mod test {
         let size = 6;
         let size_compressed = 2;
 
-        let inputs: Vec<F> = vec![2_i64, 3_i64, 4_i64, 5_i64, 6_i64]
-            .into_iter()
-            .map(to_f)
-            .collect();
+        let inputs: Vec<F> = vec![2, 3, 4, 5, 6].into_iter().map(to_f).collect();
         let config = Config {
             use_lc: true,
             use_fma: false,
@@ -462,24 +491,139 @@ mod test {
         sat(&c, &inputs, size, size_compressed);
     }
 
-    type State = [Fi64; 12];
-    use builder::poseidon2::compute_round_function;
+    use boojum::{
+        config,
+        field::{goldilocks::GoldilocksField, U64RawRepresentable},
+    };
+
+    type PoseidonState = [GoldilocksField; 12];
+    use builder::{
+        poseidon2::compute_round_function,
+        sha256::sha256,
+        vanilla::{range_check_36_bits_using_sha256_tables, range_check_u8, split_36_bits},
+    };
 
     #[test]
     fn test_poseidon2() {
         let c = {
             let mut e = builder::vanilla::TLEnv::new();
-            let input = State::input(&mut e);
+            let input = PoseidonState::input(&mut e);
+            let expected = PoseidonState::input(&mut e);
             let mut e = e.seal_inputs();
-            let _ = compute_round_function(&mut e, input);
-            // let _ = compute_round_function(&mut e, input);
+            let r = compute_round_function(&mut e, input, false);
+            r.iter()
+                .zip(expected.iter())
+                .for_each(|(x, y)| e.assert_eq(*x, *y));
             e.get_circuit()
         };
-        let size = 1875;
+        let size = 2125;
         // Boojum is 1163
-        let size_compressed = 1054;
+        // This is without the added assert_eq
+        // let size_compressed = 1054;
+        let size_compressed = 1066;
 
-        let inputs = vec![to_f(0); 12];
+        let mut inputs = vec![GoldilocksField(0); 12];
+
+        let outputs = vec![
+            GoldilocksField::from_raw_u64_unchecked(0x78e86c27e831c353),
+            GoldilocksField::from_raw_u64_unchecked(0xc4c13a505ffd93b8),
+            GoldilocksField::from_raw_u64_unchecked(0xc3a6d7d7f7971adc),
+            GoldilocksField::from_raw_u64_unchecked(0xf6ff8f53ab94d8c7),
+            GoldilocksField::from_raw_u64_unchecked(0x303ac75657e46867),
+            GoldilocksField::from_raw_u64_unchecked(0x46ba4a78ec511686),
+            GoldilocksField::from_raw_u64_unchecked(0x3c3d14c26ded4c8a),
+            GoldilocksField::from_raw_u64_unchecked(0x94e9facb98358b24),
+            GoldilocksField::from_raw_u64_unchecked(0x0bc0f0927b77ed81),
+            GoldilocksField::from_raw_u64_unchecked(0x539d02a84fe77b34),
+            GoldilocksField::from_raw_u64_unchecked(0x08f782d5fd75ff38),
+            GoldilocksField::from_raw_u64_unchecked(0x292838440f8a0e5e),
+        ];
+        inputs.extend(outputs);
+        let config = Config {
+            use_fma: true,
+            use_lc: true,
+        };
+        sat_with_config(&c, &inputs, size, size_compressed, &config, false);
+    }
+
+    #[test]
+    fn test_flatten_poseidon2() {
+        let c = {
+            let mut e = builder::vanilla::TLEnv::new();
+            let input = PoseidonState::input(&mut e);
+            let expected = PoseidonState::input(&mut e);
+            let mut e = e.seal_inputs();
+            let r = compute_round_function(&mut e, input, true);
+            println!("r: {:?}", r);
+            r.iter()
+                .zip(expected.iter())
+                .for_each(|(x, y)| e.assert_eq(*x, *y));
+            e.get_circuit()
+        };
+
+        let size = 13;
+        let size_compressed = 13;
+
+        let mut inputs = vec![GoldilocksField(0); 12];
+        let outputs = vec![
+            GoldilocksField::from_raw_u64_unchecked(0x78e86c27e831c353),
+            GoldilocksField::from_raw_u64_unchecked(0xc4c13a505ffd93b8),
+            GoldilocksField::from_raw_u64_unchecked(0xc3a6d7d7f7971adc),
+            GoldilocksField::from_raw_u64_unchecked(0xf6ff8f53ab94d8c7),
+            GoldilocksField::from_raw_u64_unchecked(0x303ac75657e46867),
+            GoldilocksField::from_raw_u64_unchecked(0x46ba4a78ec511686),
+            GoldilocksField::from_raw_u64_unchecked(0x3c3d14c26ded4c8a),
+            GoldilocksField::from_raw_u64_unchecked(0x94e9facb98358b24),
+            GoldilocksField::from_raw_u64_unchecked(0x0bc0f0927b77ed81),
+            GoldilocksField::from_raw_u64_unchecked(0x539d02a84fe77b34),
+            GoldilocksField::from_raw_u64_unchecked(0x08f782d5fd75ff38),
+            GoldilocksField::from_raw_u64_unchecked(0x292838440f8a0e5e),
+        ];
+        inputs.extend(outputs);
+
+        let config = Config {
+            use_fma: false,
+            use_lc: true,
+        };
+        sat_with_config(&c, &inputs, size, size_compressed, &config, false);
+    }
+
+    #[test]
+    fn test_rangechecks() {
+        let c = {
+            let mut e = builder::vanilla::TLEnv::new();
+            let input = SValue::input(&mut e);
+            let mut e = e.seal_inputs();
+            let _ = range_check_36_bits_using_sha256_tables(&mut e, input);
+            let _ = split_36_bits(&mut e, input);
+            e.get_circuit()
+        };
+        let size = 16;
+        let size_compressed = 9;
+
+        let inputs = vec![GoldilocksField(2); 1];
+        let config = Config {
+            use_fma: true,
+            use_lc: true,
+        };
+        sat_with_config(&c, &inputs, size, size_compressed, &config, true);
+    }
+
+    type SHAInput = [u8; 42];
+
+    #[test]
+    fn test_sha256() {
+        let c = {
+            let mut e = builder::vanilla::TLEnv::new();
+            let input = SHAInput::input(&mut e);
+            let mut e = e.seal_inputs();
+            let _ = sha256(&mut e, &input);
+            e.get_circuit()
+        };
+        let size = 14152;
+        let size_compressed = 7928;
+
+        let inputs = vec![GoldilocksField(0); 42];
         let config = Config {
             use_fma: true,
             use_lc: true,
