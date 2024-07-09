@@ -1,5 +1,7 @@
 {-# OPTIONS --warning=noModuleDoesntExport #-}
-module CLAP-EXAMPLES where
+open import Data.Integer renaming (_+_ to _+ᵢ_ ; _*_ to _*ᵢ_ ; _≟_ to _≟z_ ; +_ to ᵢ+_)
+  using (_≤ᵇ_ ; ℤ ; _+ᵢ_ ; _*ᵢ_ ; _≟z_ ; Sign ; ᵢ+_ ; -[1+_] ; _/_ ; ≢-nonZero ; _%_ ; _-_ ; ∣_∣ )
+module EGCD (modulus : ℤ) where
 
 open import Relation.Nullary.Decidable using (True; toWitness)
 import Relation.Binary.PropositionalEquality as Eq
@@ -20,42 +22,36 @@ open import Data.Product renaming (_,_ to _,,_) hiding (map)
 open import Data.Bool hiding (_≤_ ; _≤?_) renaming (_≟_ to _≟b_)
 open import Data.Maybe renaming (_>>=_ to _>>=m_)
 open import Data.Sum hiding ([_,_])
-open import Data.Integer renaming (_+_ to _+ᵢ_ ; _*_ to _*ᵢ_ ; _≟_ to _≟z_ ; +_ to ᵢ+_)
-  using (_≤ᵇ_ ; ℤ ; _+ᵢ_ ; _*ᵢ_ ; _≟z_ ; Sign ; ᵢ+_ ; -[1+_] ; _/_ ; ≢-nonZero ; _%_ ; _-_ ; ∣_∣ )
+
 open import Data.Nat.Properties using (≤-totalOrder)
 open import Data.List.Extrema ≤-totalOrder
 
 open import Relation.Nullary
 
 
-open import CLAP-MONAD (ᵢ+ 29)
-open CLAP-MONAD-ℤ
 
-test1 : CM ⊤
-test1 = do c₁ ← const-gate (ᵢ+ 3)
-           c₂ ← const-gate (ᵢ+ 0)
-           c₃ ← add-gate c₁ c₂
-           c₄ ← add-gate c₁ c₂
-           assert-eq0 c₂
-           add-gate c₁ c₁
-           return tt
+_≡ᵇz_ : ℤ → ℤ → Bool
+x ≡ᵇz y = isYes (x ≟z y)
 
-trace1 = runTrace test1
-cs1    = runCS    test1
+_%%_ : ℤ → ℤ → ℤ
+a %% b with b ≟z (ᵢ+ 0)
+... | .true because ofʸ a₁ = (ᵢ+ 4)
+... | .false because ofⁿ ¬a = ᵢ+ _%_ a b ⦃ ≢-nonZero ¬a  ⦄
 
+_%/_ : ℤ → ℤ → ℤ
+a %/ b with b ≟z (ᵢ+ 0)
+... | .true because ofʸ a₁ = (ᵢ+ 4)
+... | .false because ofⁿ ¬a = _/_ a b ⦃ ≢-nonZero ¬a  ⦄
 
+signum : ℤ → ℤ
+signum (ᵢ+_ zero) = ᵢ+ zero
+signum (ᵢ+_ (suc n)) = ᵢ+ 1
+signum (-[1+_] n) = -[1+ 0 ]
 
-_ : satCS' (proj₂ cs1) trace1 ≡ true
-_ = refl
+{-# TERMINATING #-}
+egcd : ℤ → ℤ → (ℤ × ℤ × ℤ)
+egcd a (ᵢ+_ 0) = ᵢ+ ∣ a ∣ ,, signum a ,, ᵢ+ 4
+egcd a b = let (g ,, x ,, y) = egcd b (a %% b) in (g ,, y ,, x - ((a %/ b) *ᵢ y))
 
-
-test2 : CM ⊤
-test2 = do c₁ ← const-gate (ᵢ+ 5)
-           assert-eq0 c₁
-           
-
-trace2 = runTrace test2
-cs2    = runCS  test2
-
-_ : satCS cs2 trace2 ≡ false
-_ = refl
+inverse : ℤ → ℤ → ℤ
+inverse a m = let (x ,, z ,, y) = egcd m a in y %% m
