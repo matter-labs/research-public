@@ -1,6 +1,6 @@
 use crate::cs_arith::Arith;
 use crate::cs_boolcheck::GBoolCheck;
-use crate::expr::{Config, Gate, Name, NameContext, Trace, CV};
+use crate::expr::{apply_renaming, Config, Gate, Name, NameContext, Trace, CV};
 use crate::field::Field;
 
 #[derive(Debug, Clone)]
@@ -10,6 +10,10 @@ pub struct IsZero {
 }
 
 impl<F: Field + 'static> Gate<F> for IsZero {
+    fn kind(&self) -> String {
+        "IsZero".into()
+    }
+
     fn gen_cs(&self, config: &Config, ctxt: &mut NameContext<F>) -> Vec<Box<dyn CV<F>>> {
         // 1) b = - l * r + 1
         // 2) b^2 - b = 0
@@ -40,7 +44,7 @@ impl<F: Field + 'static> Gate<F> for IsZero {
 
     fn gen_trace(&self, config: &Config, ctxt: &mut NameContext<F>, trace: &mut Trace<F>) -> bool {
         let (ok, i) = ctxt.read_name(self.x, trace);
-        ctxt.push(Name::Unused);
+        ctxt.push_unused();
         ctxt.push(self.b);
         let b = if i == F::ZERO { F::ONE } else { F::ZERO };
         let r = if i == F::ZERO { F::ZERO } else { F::ONE.div(i) };
@@ -53,8 +57,16 @@ impl<F: Field + 'static> Gate<F> for IsZero {
         vec![self.x]
     }
 
+    fn output_vars(&self) -> Vec<Name> {
+        vec![self.b]
+    }
+
     fn clone_box(&self) -> Box<dyn Gate<F>> {
         Box::new(self.clone())
+    }
+    fn rename(&mut self, renaming: &crate::expr::Renaming) {
+        self.x = apply_renaming(self.x, renaming);
+        self.b = apply_renaming(self.b, renaming)
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::cs_arith::Arith;
-use crate::expr::{Config, Gate, Name, NameContext, Trace, CV};
+use crate::expr::{apply_renaming, Config, Gate, Name, NameContext, Trace, CV};
 use crate::field::Field;
 
 #[derive(Debug, Clone)]
@@ -9,6 +9,10 @@ pub struct Inv {
 }
 
 impl<F: Field + 'static> Gate<F> for Inv {
+    fn kind(&self) -> String {
+        "Inv".into()
+    }
+
     fn gen_cs(&self, config: &Config, ctxt: &mut NameContext<F>) -> Vec<Box<dyn CV<F>>> {
         let l = self.x;
         let r = self.i;
@@ -47,8 +51,17 @@ impl<F: Field + 'static> Gate<F> for Inv {
         vec![self.x]
     }
 
+    fn output_vars(&self) -> Vec<Name> {
+        vec![self.i]
+    }
+
     fn clone_box(&self) -> Box<dyn Gate<F>> {
         Box::new(self.clone())
+    }
+
+    fn rename(&mut self, renaming: &crate::expr::Renaming) {
+        self.x = apply_renaming(self.x, renaming);
+        self.i = apply_renaming(self.i, renaming)
     }
 }
 

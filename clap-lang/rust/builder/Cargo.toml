@@ -9,3 +9,7 @@ edition = "2021"
 base = {path = "../base"}
 monadic = "0.5.5"
 pairing = { package = "pairing_ce", git = "https://github.com/matter-labs/pairing.git" }
+cs_derive = { git = "https://github.com/matter-labs/era-boojum.git", branch = "v0.2" }
+boojum = {git = "https://github.com/matter-labs/era-boojum.git", branch = "v0.2"}
+arrayvec = "0.7"
+array-init = "2.1.0"

@@ -1,5 +1,6 @@
-use base::field::{Fi64, Field};
-type F = Fi64;
+use base::field::Field;
+use boojum::field::goldilocks::GoldilocksField;
+type F = GoldilocksField;
 
 pub const RATE: usize = 8;
 pub const CAPACITY: usize = 4;
@@ -160,7 +161,8 @@ pub const INNER_ROUNDS_MATRIX_DIAGONAL_ELEMENTS_MINUS_ONE: [F; 12] = const {
     let mut result = [F::ZERO; 12];
     let mut i = 0;
     while i < 12 {
-        result[i] = Fi64(1i64 << INNER_ROUNDS_MATRIX_DIAGONAL_ELEMENTS_MINUS_ONE_SHIFTS[i]);
+        result[i] =
+            GoldilocksField(1u64 << INNER_ROUNDS_MATRIX_DIAGONAL_ELEMENTS_MINUS_ONE_SHIFTS[i]);
         i += 1;
     }
 
@@ -168,8 +170,28 @@ pub const INNER_ROUNDS_MATRIX_DIAGONAL_ELEMENTS_MINUS_ONE: [F; 12] = const {
 };
 
 pub const EXTERNAL_MDS_MATRIX_BLOCK: [[F; 4]; 4] = [
-    [Fi64(5), Fi64(7), Fi64(1), Fi64(3)],
-    [Fi64(4), Fi64(6), Fi64(1), Fi64(1)],
-    [Fi64(1), Fi64(3), Fi64(5), Fi64(7)],
-    [Fi64(1), Fi64(1), Fi64(4), Fi64(6)],
+    [
+        GoldilocksField(5),
+        GoldilocksField(7),
+        GoldilocksField(1),
+        GoldilocksField(3),
+    ],
+    [
+        GoldilocksField(4),
+        GoldilocksField(6),
+        GoldilocksField(1),
+        GoldilocksField(1),
+    ],
+    [
+        GoldilocksField(1),
+        GoldilocksField(3),
+        GoldilocksField(5),
+        GoldilocksField(7),
+    ],
+    [
+        GoldilocksField(1),
+        GoldilocksField(1),
+        GoldilocksField(4),
+        GoldilocksField(6),
+    ],
 ];

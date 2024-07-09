@@ -1,5 +1,5 @@
 use crate::{
-    expr::{Config, Constr, Gate, Name, NameContext, Trace, CV},
+    expr::{apply_renaming, Config, Constr, Gate, Name, NameContext, Trace, CV},
     field::Field,
 };
 
@@ -54,6 +54,10 @@ impl<F: Field + 'static> CV<F> for SwapCV {
 }
 
 impl<F: Field + 'static> Gate<F> for Swap {
+    fn kind(&self) -> String {
+        "Swap".into()
+    }
+
     fn gen_cs(&self, config: &Config, ctxt: &mut NameContext<F>) -> Vec<Box<dyn CV<F>>> {
         let b = ctxt.get(self.b);
         let l = ctxt.get(self.l);
@@ -80,8 +84,20 @@ impl<F: Field + 'static> Gate<F> for Swap {
         vec![self.b, self.l, self.r]
     }
 
+    fn output_vars(&self) -> Vec<Name> {
+        vec![self.o1, self.o2]
+    }
+
     fn clone_box(&self) -> Box<dyn Gate<F>> {
         Box::new(self.clone())
+    }
+
+    fn rename(&mut self, renaming: &crate::expr::Renaming) {
+        self.b = apply_renaming(self.b, renaming);
+        self.l = apply_renaming(self.l, renaming);
+        self.r = apply_renaming(self.r, renaming);
+        self.o1 = apply_renaming(self.o1, renaming);
+        self.o2 = apply_renaming(self.o2, renaming);
     }
 }
 

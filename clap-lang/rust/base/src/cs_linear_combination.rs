@@ -1,5 +1,5 @@
 use crate::{
-    expr::{Config, Constr, Gate, Name, NameContext, Trace, CV},
+    expr::{apply_renaming, Config, Constr, Gate, Name, NameContext, Trace, CV},
     field::Field,
 };
 
@@ -47,6 +47,10 @@ impl<F: Field + 'static, const N: usize> CV<F> for LinearCombinationCV<F, N> {
 }
 
 impl<F: Field + 'static, const N: usize> Gate<F> for LinearCombination<F, N> {
+    fn kind(&self) -> String {
+        "LinearCombination".into()
+    }
+
     fn gen_cs(&self, config: &Config, ctxt: &mut NameContext<F>) -> Vec<Box<dyn CV<F>>> {
         let vars = self.vars.map(|n| ctxt.get(n));
         let o = ctxt.get(self.o);
@@ -75,12 +79,78 @@ impl<F: Field + 'static, const N: usize> Gate<F> for LinearCombination<F, N> {
         self.vars.to_vec()
     }
 
+    fn output_vars(&self) -> Vec<Name> {
+        vec![self.o]
+    }
+
+    fn other_params(&self) -> Vec<u8> {
+        let consts = self.coeffs;
+        consts
+            .iter()
+            .flat_map(|f| f.to_u64().to_be_bytes().to_vec())
+            .collect()
+    }
+
     fn clone_box(&self) -> Box<dyn Gate<F>> {
         Box::new(self.clone())
+    }
+
+    fn rename(&mut self, renaming: &crate::expr::Renaming) {
+        self.o = apply_renaming(self.o, renaming);
+        self.vars = self.vars.map(|n| apply_renaming(n, renaming))
     }
 }
 
 impl<F: Field + 'static, const N: usize> std::fmt::Display for LinearCombination<F, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AssertionLC<F: Field, const N: usize>(pub LinearCombination<F, N>);
+
+impl<F: Field + 'static, const N: usize> Gate<F> for AssertionLC<F, N> {
+    fn kind(&self) -> String {
+        "Assertion".into()
+    }
+
+    fn gen_cs(&self, config: &Config, ctxt: &mut NameContext<F>) -> Vec<Box<dyn CV<F>>> {
+        self.0.gen_cs(config, ctxt)
+    }
+
+    fn gen_trace(&self, config: &Config, ctxt: &mut NameContext<F>, trace: &mut Trace<F>) -> bool {
+        true
+    }
+
+    fn input_vars(&self) -> Vec<Name> {
+        let mut ins = self.0.vars.to_vec();
+        ins.push(self.0.o);
+        ins
+    }
+
+    fn output_vars(&self) -> Vec<Name> {
+        vec![]
+    }
+
+    fn other_params(&self) -> Vec<u8> {
+        let consts = self.0.coeffs;
+        consts
+            .iter()
+            .flat_map(|f| f.to_u64().to_be_bytes().to_vec())
+            .collect()
+    }
+
+    fn clone_box(&self) -> Box<dyn Gate<F>> {
+        Box::new(self.clone())
+    }
+
+    fn rename(&mut self, renaming: &crate::expr::Renaming) {
+        self.0.rename(renaming);
+    }
+}
+
+impl<F: Field + 'static, const N: usize> std::fmt::Display for AssertionLC<F, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }

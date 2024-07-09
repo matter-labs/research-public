@@ -1,3 +1,5 @@
+use boojum::field::goldilocks::GoldilocksField;
+use boojum::field::PrimeField;
 use core::fmt::Debug;
 use std::fmt::Display;
 use std::{
@@ -17,6 +19,48 @@ pub trait Field:
     fn div(self, _: Self) -> Self;
     fn from_u32(i: u32) -> Self;
     fn to_u32(self) -> u32;
+    fn from_u64(i: u64) -> Self;
+    fn to_u64(self) -> u64;
+}
+
+pub trait SmallField: Field {
+    // computes a*b + c, handy in small fields where a * b + c doesn't overflow u128::MAX
+    fn fma(a: Self, b: Self, c: Self) -> Self;
+}
+
+impl Field for GoldilocksField {
+    const ZERO: Self = <GoldilocksField as boojum::field::Field>::ZERO;
+    const ONE: Self = <GoldilocksField as boojum::field::Field>::ONE;
+    const TWO: Self = <GoldilocksField as boojum::field::Field>::TWO;
+    const MONE: Self = <GoldilocksField as boojum::field::Field>::MINUS_ONE;
+    fn add(self, rhs: Self) -> Self {
+        self + rhs
+    }
+    fn mul(self, rhs: Self) -> Self {
+        self * rhs
+    }
+    fn div(self, rhs: Self) -> Self {
+        self * GoldilocksField::inverse(&rhs).unwrap()
+    }
+    fn from_u32(i: u32) -> Self {
+        GoldilocksField::from_nonreduced_u64(i.into())
+    }
+    fn to_u32(self) -> u32 {
+        self.to_nonreduced_u64().try_into().unwrap()
+    }
+    fn from_u64(i: u64) -> Self {
+        <GoldilocksField as boojum::field::traits::representation::U64Representable>::from_u64_unchecked(i)
+    }
+
+    fn to_u64(self) -> u64 {
+        <GoldilocksField as boojum::field::traits::representation::U64Representable>::as_u64(self)
+    }
+}
+
+impl<F: boojum::field::SmallField + Field> SmallField for F {
+    fn fma(a: Self, b: Self, c: Self) -> Self {
+        <F as boojum::field::SmallField>::fma(a, b, c)
+    }
 }
 
 impl Field for i32 {
@@ -37,6 +81,12 @@ impl Field for i32 {
         i.try_into().unwrap()
     }
     fn to_u32(self) -> u32 {
+        self.try_into().unwrap()
+    }
+    fn from_u64(i: u64) -> Self {
+        i.try_into().unwrap()
+    }
+    fn to_u64(self) -> u64 {
         self.try_into().unwrap()
     }
 }
@@ -96,6 +146,13 @@ impl Field for Fi64 {
         Fi64(i.into())
     }
     fn to_u32(self) -> u32 {
+        self.0.try_into().unwrap()
+    }
+
+    fn from_u64(i: u64) -> Self {
+        Fi64(i.try_into().unwrap())
+    }
+    fn to_u64(self) -> u64 {
         self.0.try_into().unwrap()
     }
 }

@@ -8,6 +8,10 @@ edition = "2021"
 [dependencies]
 base = {path = "base"}
 builder = { path = "builder" }
+cs_derive = { git = "https://github.com/matter-labs/era-boojum.git", branch = "v0.2" }
+boojum = {git = "https://github.com/matter-labs/era-boojum.git", branch = "v0.2"}
+
+
 
 [workspace]
 members = [
