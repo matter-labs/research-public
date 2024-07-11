@@ -280,11 +280,11 @@ module SoundnessAndCompletenessCompose
                                            (posCorr-extInps pos c (proj₁ wf) pc) 
 
 
- completeness-composable :  (c₁ c₂ : Circuit)
+ completenessSeq :  (c₁ c₂ : Circuit)
   → Completeness c₁ 
   → Completeness c₂
   → Completeness (seq c₁ c₂)
- completeness-composable c₁ c₂ cmplt1 cmplt2 trace cs pos wfc wfcs pr rp prop 
+ completenessSeq c₁ c₂ cmplt1 cmplt2 trace cs pos wfc wfcs pr rp prop 
   = cmplt2 
      (genTraceA c₁ trace)
      (genCS c₁ cs)
@@ -326,11 +326,11 @@ module SoundnessAndCompletenessCompose
    = refl
 
 
- soundness-composable : (c₁ c₂ : Circuit)
+ soundnessSeq : (c₁ c₂ : Circuit)
    → Soundness c₁
    → Soundness c₂
    → Soundness (seq c₁ c₂)
- soundness-composable c c₁ hyp1 hyp2 cs pos t1 t2  posCorr cspos w1 l1 l2 wfc sat1 sat2 pr1
+ soundnessSeq c c₁ hyp1 hyp2 cs pos t1 t2  posCorr cspos w1 l1 l2 wfc sat1 sat2 pr1
    = hyp2 (genCS c cs) 
           (extInps c pos) t1 
           (genTrace c t2) --c₁
