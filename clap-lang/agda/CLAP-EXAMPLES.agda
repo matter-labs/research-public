@@ -30,6 +30,7 @@ open import Relation.Nullary
 
 open import CLAP-MONAD (ᵢ+ 29)
 open CLAP-MONAD-ℤ
+open CLAP-INSTANCE-ℤ
 
 test1 : CM ⊤
 test1 = do c₁ ← const-gate (ᵢ+ 3)
@@ -42,7 +43,6 @@ test1 = do c₁ ← const-gate (ᵢ+ 3)
 
 trace1 = runTrace test1
 cs1    = runCS    test1
-
 
 
 _ : satCS' (proj₂ cs1) trace1 ≡ true
@@ -59,3 +59,18 @@ cs2    = runCS  test2
 
 _ : satCS cs2 trace2 ≡ false
 _ = refl
+
+test3 : Circuit
+test3 = par (seq (gate (const (ᵢ+ 5 ))) (gate (add 0 0)))  (seq (gate (const (ᵢ+ 4))) (gate (add 2 2))) 
+
+_ : genTrace test3 [] ≡ ᵢ+ 5 ∷ ᵢ+ 10 ∷ ᵢ+ 4 ∷ ᵢ+ 8 ∷ []
+_ = refl
+
+-- ill-formed circuit 
+test4 : Circuit
+test4 = (par (gate (const (ᵢ+ 5 ))) (gate (add 0 0)))
+
+{-
+-- not provable
+_ : WellFormedCircuit test4 (0 ,, [])
+-}

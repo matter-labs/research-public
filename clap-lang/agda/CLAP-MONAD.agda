@@ -30,9 +30,12 @@ open import Data.List.Extrema ≤-totalOrder
 
 open import Relation.Nullary
 
-open import CLAP-INSTANCE modulus
+import CLAP-INSTANCE
+module CLAP-INSTANCE-ℤ =  CLAP-INSTANCE modulus
+open CLAP-INSTANCE-ℤ
 module CLAP-MONAD-ℤ =  CLAP-BASE-ℤ
 open  CLAP-MONAD-ℤ
+
 
 Var = ℕ
 
@@ -43,6 +46,13 @@ _>>=_ : {A B : Set} → CM A → (A → CM B) → CM B
 cma >>= cmb = λ n → let (next ,, a ,, c) = cma n in
                     let (next' ,, b ,, c')  =  cmb a next in
                     next' ,, b ,, seq c c'
+
+
+
+_>>=ₚ_ : {A B : Set} → CM A → (A → CM B) → CM B
+cma >>=ₚ cmb = λ n → let (next ,, a ,, c) = cma n in
+                    let (next' ,, b ,, c')  =  cmb a next in
+                    next' ,, b ,, par c c'
 
 
 return : {A : Set} → A → CM A

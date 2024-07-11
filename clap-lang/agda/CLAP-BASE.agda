@@ -63,7 +63,7 @@ extInps (gate g) poses = extInps-gate g poses
 WellFormedCircuit : Circuit → ℕ × List ℕ → Set
 WellFormedCircuit empty l = ⊤
 WellFormedCircuit (seq c₁ c₂) (n ,, l) = WellFormedCircuit c₁ (n ,, l) × WellFormedCircuit c₂ (extInps c₁ (n ,, l))
-WellFormedCircuit (par c₁ c₂) (n ,, l) = WellFormedCircuit c₁ (n ,, l) × WellFormedCircuit c₂ (n ,, l) × WellFormedCircuit c₂ (extInps c₁ (n ,, l))
+WellFormedCircuit (par c₁ c₂) (n ,, l) = WellFormedCircuit c₁ (n ,, l) × WellFormedCircuit c₂ (proj₁ (extInps c₁ (n ,, l)) ,, l) × WellFormedCircuit c₂ (extInps c₁ (n ,, l))
 WellFormedCircuit (gate g) = WellFormedGate g
 
 {- constraint expressions are well-formed -}
