@@ -66,7 +66,7 @@ test3 = par (seq (gate (const (ᵢ+ 5 ))) (gate (add 0 0)))  (seq (gate (const (
 _ : genTrace test3 [] ≡ ᵢ+ 5 ∷ ᵢ+ 10 ∷ ᵢ+ 4 ∷ ᵢ+ 8 ∷ []
 _ = refl
 
--- ill-wormed circuit 
+-- ill-formed circuit 
 test4 : Circuit
 test4 = (par (gate (const (ᵢ+ 5 ))) (gate (add 0 0)))
 
